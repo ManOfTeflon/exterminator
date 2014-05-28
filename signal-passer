@@ -1,0 +1,44 @@
+#!/usr/bin/python
+
+import signal, os, sys, subprocess, time, atexit
+
+g_pid = None
+
+def kill_child_processes(parent_pid, signum):
+    for pid in subprocess.check_output("pgrep -P %d" % g_pid, shell=True).split():
+        os.kill(int(pid), signum)
+
+def pass_along(signum, frame):
+    kill_child_processes(g_pid, signum)
+
+def pass_along_and_die(signum, frame):
+    pass_along(signum, frame)
+    exit(0)
+
+@atexit.register
+def wait():
+    raw_input()
+    exit(1)
+
+if __name__ == '__main__':
+    assert len(sys.argv) == 2
+    dbg = int(sys.argv[1])
+    while g_pid is None:
+        try:
+            for line in subprocess.check_output("ps -o pid=,comm= --ppid %d" % dbg, shell=True).split('\n')[:-1]:
+                pid, command = line.split()
+                if command == 'gdb':
+                    g_pid = int(pid)
+                    break
+        except:
+            pass
+        time.sleep(0.1)
+
+    for sig in [ signal.SIGINT, signal.SIGQUIT, signal.SIGTERM ]:
+        signal.signal(sig, pass_along)
+    for sig in [ signal.SIGHUP ]:
+        signal.signal(sig, pass_along_and_die)
+
+    while True:
+        time.sleep(10)
+
