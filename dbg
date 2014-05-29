@@ -29,18 +29,21 @@ launch () {
     fi
 }
 
-if [ -z "$VIM_DEBUG_SERVER" ]; then
-    vimserver=dbg.$$
-    launch vim -c "let g:session_autoload='no'" --servername $vimserver
+if [ -z "$EXTERMINATOR_FILE" ]; then
+    VIM_SERVERNAME="DBG.$$"
+    file=$(mktemp)
+    launch vim -c "let g:session_autoload='no'" -c "let g:exterminator_file='$file'" --servername $VIM_SERVERNAME
 else
-    vimserver=$VIM_DEBUG_SERVER
+    file=$EXTERMINATOR_FILE
 fi
 
-horizontal=1 launch $exe_dir/signal-passer $$
+launch $exe_dir/signal-passer $$
 
 echo Debugging in $(pwd): $@ > $pts
 echo > $pts
 
-gdb -ex "tty $pts" -ex "set \$vim = \"$vimserver\"" -x $exe_dir/gdb_fancy.py -args "$@"
+gdb -ex "tty $pts" -x $exe_dir/gdb_fancy.py -args "$@"
 
 kill $owned 2>/dev/null
+
+rm $file
