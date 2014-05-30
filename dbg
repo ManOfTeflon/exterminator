@@ -11,7 +11,6 @@ launch () {
         owned="$owned $parent"
         pts="/dev/$(ps -o tty= --pid=$pid)"
     else
-        current_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
         this_tty=$(ps -o tty= --pid $$)
         this_pane=$(tmux list-panes -F '#{pane_tty} #{pane_id}' | grep "$this_tty" | awk '{ print $2 }')
         tmux select-pane -t $this_pane
@@ -25,25 +24,30 @@ launch () {
         else
             tmux split-window -h "$cmd"
         fi
-        new_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_pid} #{pane_tty}' | grep active | awk '{ print $2, $3 }')
+        new_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_pid} #{pane_tty} #{pane_id}' | grep active | awk '{ print $2, $3 }')
         owned="$owned $(echo $new_pane | awk '{ print $1 }')"
         pts=$(echo $new_pane | awk '{ print $2 }')
-        tmux select-pane -t $current_pane
     fi
 }
+
+current_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
 
 if [ -z "$EXTERMINATOR_FILE" ]; then
     VIM_SERVERNAME="DBG.$$"
     file=$(mktemp)
-    launch vim -c "let g:session_autoload='no'" -c "let g:exterminator_file='$file'" --servername $VIM_SERVERNAME
+    horizontal=1 launch vim -c "let g:session_autoload='no'" -c "let g:exterminator_file='$file'"
 else
     file=$EXTERMINATOR_FILE
 fi
+
+export VIM_TMUX_PANE=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
 
 launch $exe_dir/signal-passer $$
 
 echo Debugging in $(pwd): $@ > $pts
 echo > $pts
+
+tmux select-pane -t $current_pane
 
 gdb -ex "tty $pts" -x $exe_dir/gdb_fancy.py -args "$@"
 

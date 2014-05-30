@@ -26,10 +26,10 @@ EOF
 function! StartDebugger(...)
     Rooter
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')
-    exec 'silent ! tmux split -d -p 30 -h "VIM_SERVER=' . v:servername . ' EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . g:exterminator_dir . '/dbg '. join(a:000, ' ') . '"'
-    if len(v:servername) == 0
-        python InitRemoteGdbWithFile(vim.eval("g:exterminator_file"))
-    endif
+    exec 'silent ! tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . g:exterminator_dir . '/dbg '. join(a:000, ' ') . '"'
+    " if len(v:servername) == 0
+    "     python InitRemoteGdbWithFile(vim.eval("g:exterminator_file"))
+    " endif
     unlet g:exterminator_file
     wincmd =
 endfunction

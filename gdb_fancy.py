@@ -7,7 +7,7 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
         found = { '0x0': 'nullptr' }
     if fullname is None:
         fullname = name
-    else:
+    elif separator is not False:
         fullname = fullname + separator + name
     t = value.type
     try:
@@ -22,9 +22,12 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
 
     if t.code == gdb.TYPE_CODE_PTR:
         if s in found.keys():
-            return { "%s (%s)" % (name, tn): { found[s]: "" } }
-        found[s] = fullname
-        if False and str(t.target().unqualified()) == 'char':
+            if t.target().code != gdb.TYPE_CODE_INT and t.target().code != gdb.TYPE_CODE_BOOL:
+                return { "%s (%s)" % (name, tn): { found[s]: "" } }
+        else:
+            found[s] = fullname
+
+        if str(t.target().unqualified()) == 'char':
             try:
                 s = "Cannot decode object"
                 for encoding in [ 'utf8', 'ascii' ]:
@@ -33,11 +36,16 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
                         break
                     except UnicodeDecodeError:
                         pass
+                s = '"%s"' % s.encode("unicode-escape")
                 return { "%s (%s)" % (name, tn): { s : "" } }
             except gdb.error as e:
                 return { "%s (%s)" % (name, tn): { str(e) : "" } }
+            except gdb.MemoryError as e:
+                return { "%s (%s)" % (name, tn): { str(e) : "" } }
+
         t = t.target()
-        return gdb_to_py(name, value.dereference(), found, fullname, '->')
+        fullname = fullname + '->'
+        return gdb_to_py(name, value.dereference(), found, fullname, False)
     elif t.code == gdb.TYPE_CODE_REF:
         if s in found.keys():
             return { "%s (%s)" % (name, tn): { found[s]: "" } }
@@ -52,7 +60,7 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
                     child = value[field.name]
                 except gdb.error:
                     continue # Static field
-                contents = dict(contents, **gdb_to_py(field.name, child, found, fullname))
+                contents = dict(contents, **gdb_to_py(field.name, child, found, fullname, '' if separator is False else '.'))
         return { "%s (%s)" % (name, tn): contents }
     else:
         return { "%s (%s)" % (name, tn): { s: "" } }
@@ -60,9 +68,9 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
 class Gdb(object):
     def __init__(self, sock, proxy):
         try:
-            self.servername = os.environ['VIM_SERVER']
+            self.vim_tmux_pane = os.environ['VIM_TMUX_PANE']
         except KeyError:
-            self.servername = None
+            self.vim_tmux_pane = None
         self.sock = sock
         self.next_breakpoint = 2
         self.proxy = proxy
@@ -75,9 +83,10 @@ class Gdb(object):
         assert hello['op'] == 'init', str(hello)
 
         self.port = hello['port']
-        self.host = hello['host']
-        if self.servername:
-            os.system('vim --servername %s --remote-send "<esc><esc>:python InitRemoteGdb(\'%s\', %d)<cr>"' % (self.servername, self.host, self.port))
+        if self.vim_tmux_pane:
+            os.system('tmux send-keys -t %s "\x1b\x1b:python InitRemoteGdb(\'localhost\', %d)" ENTER' % (self.vim_tmux_pane, self.port))
+
+        gdb.execute("set pagination off")
 
     def attach_hooks(self):
         def on_prompt(prompt):
@@ -98,16 +107,25 @@ class Gdb(object):
             self.vim(dest='proxy', op='quit')
         gdb.events.exited.connect(kill_server)
 
+    def dettach_hooks(self):
+        gdb.prompt_hook = None
+        gdb.events.exited.connect(None)
+
     def vim(self, **kwargs):
         self.sock.send(dict({'dest': 'vim'}, **kwargs))
-        if self.servername:
-            os.system('vim --servername %s --remote-send "<esc><esc>:GdbRefresh<cr>"' % self.servername)
+        if self.vim_tmux_pane:
+            os.system('tmux send-keys -t %s "\x1b\x1b:GdbRefresh" ENTER' % (self.vim_tmux_pane))
 
     def handle_events(self):
         if not self.sock.poll():
             return
         while True:
-            c = self.sock.recv()
+            try:
+                c = self.sock.recv()
+            except IOError:
+                print "Connection to VIM reset by peer.  Continuing as normal GDB session."
+                self.detach_hooks()
+                return
             if c['op'] == 'exec':
                 try:
                     print c['comm']
@@ -238,7 +256,7 @@ class RemoteGdb(object):
         while True:
             try:
                 c = self.sock.recv()
-            except EOFError:
+            except (IOError, EOFError):
                 print "Lost connection to GDB"
                 self.quit()
                 return
