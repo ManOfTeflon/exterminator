@@ -82,9 +82,8 @@ class Gdb(object):
         hello = self.sock.recv()
         assert hello['op'] == 'init', str(hello)
 
-        self.port = hello['port']
         if self.vim_tmux_pane:
-            os.system('tmux send-keys -t %s "\x1b\x1b:python InitRemoteGdb(\'localhost\', %d)" ENTER' % (self.vim_tmux_pane, self.port))
+            os.system('tmux send-keys -t %s "\x1b\x1b:GdbConnect" ENTER' % (self.vim_tmux_pane))
 
         gdb.execute("set pagination off")
 

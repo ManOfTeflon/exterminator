@@ -3,24 +3,19 @@ let g:exterminator_dir = expand("<sfile>:p:h:h")
 python << EOF
 
 import vim
-import sys, os, json, time
+import sys, os, json
 sys.path.insert(0, os.path.join(vim.eval("g:exterminator_dir"), 'lib'))
 import exterminator
 
 vim.gdb = None
 
-def InitRemoteGdbWithFile(exterminator_file):
-    while True:
-       try:
-           data = open(exterminator_file, 'r').read()
-           host, port = json.loads(open(exterminator_file, 'r').read())
-           break
-       except ValueError, IOError:
-           time.sleep(0.1)
-    InitRemoteGdb(host, port)
-
-def InitRemoteGdb(host, port):
-    vim.gdb = exterminator.RemoteGdb(vim, host, port)
+def InitRemoteGdb():
+    try:
+        host, port = json.loads(open(vim.eval('g:exterminator_file'), 'r').read())
+        vim.gdb = exterminator.RemoteGdb(vim, host, port)
+        vim.command("unlet g:exterminator_file")
+    except:
+        vim.command("echoerr 'Problem encountered initializing GDB from file ' . g:exterminator_file")
 
 EOF
 
@@ -37,6 +32,7 @@ comm! -nargs=1 GdbEval      python vim.gdb is None or vim.gdb.eval_expr(<f-args>
 comm! -nargs=0 GdbEvalToken python vim.gdb is None or vim.gdb.eval_expr(vim.eval("expand('<cword>')"))
 comm! -nargs=0 GdbQuit      python vim.gdb is None or vim.gdb.quit()
 comm! -nargs=0 GdbRefresh   python vim.gdb is None or vim.gdb.handle_events()
+comm! -nargs=0 GdbConnect   python InitRemoteGdb()
 comm! -nargs=+ Dbg          call StartDebugger(<f-args>)
 
 highlight SignColumn guibg=Black guifg=White ctermbg=None ctermfg=White
