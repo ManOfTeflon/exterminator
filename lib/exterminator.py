@@ -7,7 +7,7 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
         found = { '0x0': 'nullptr' }
     if fullname is None:
         fullname = name
-    elif separator is not False:
+    elif separator not in [ True, False ]:
         fullname = fullname + separator + name
     t = value.type
     try:
@@ -45,7 +45,10 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
 
         t = t.target()
         fullname = fullname + '->'
-        return gdb_to_py(name, value.dereference(), found, fullname, False)
+        try:
+            return gdb_to_py(name, value.dereference(), found, fullname, False)
+        except gdb.error as e:
+            return { "%s (%s)" % (name, tn): { str(e) : "" } }
     elif t.code == gdb.TYPE_CODE_REF:
         if s in found.keys():
             return { "%s (%s)" % (name, tn): { found[s]: "" } }
@@ -55,12 +58,21 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
     if t.code == gdb.TYPE_CODE_STRUCT:
         contents = {}
         for field in t.fields():
+            separator_to_use = '' if separator is False else '.'
             if not field.is_base_class:
                 try:
                     child = value[field.name]
-                except gdb.error:
-                    continue # Static field
-                contents = dict(contents, **gdb_to_py(field.name, child, found, fullname, '' if separator is False else '.'))
+                    this = gdb_to_py(field.name, child, found, fullname, separator_to_use)
+                except gdb.error as e:
+                    this = { "%s (%s)" % (name, tn): { str(e) : "" } }
+            else:
+                try:
+                    child = value.cast(field.type)
+                    this = gdb_to_py(field.name, child, found, fullname, separator_to_use)
+                except gdb.error as e:
+                    this = { "%s (%s)" % (name, tn): { str(e) : "" } }
+                separator_to_use = True
+            contents = dict(contents, **this)
         return { "%s (%s)" % (name, tn): contents }
     else:
         return { "%s (%s)" % (name, tn): { s: "" } }
@@ -111,61 +123,84 @@ class Gdb(object):
         gdb.events.exited.connect(None)
 
     def vim(self, **kwargs):
-        self.sock.send(dict({'dest': 'vim'}, **kwargs))
-        if self.vim_tmux_pane:
+        p = dict({'dest': 'vim'}, **kwargs)
+        self.sock.send(p)
+        if self.vim_tmux_pane and p['dest'] == 'vim' and p['op'] != 'quit':
             os.system('tmux send-keys -t %s "\x1b\x1b:GdbRefresh" ENTER' % (self.vim_tmux_pane))
 
     def handle_events(self):
         if not self.sock.poll():
             return
-        while True:
-            try:
-                c = self.sock.recv()
-            except IOError:
-                print "Connection to VIM reset by peer.  Continuing as normal GDB session."
-                self.detach_hooks()
-                return
-            if c['op'] == 'exec':
+        sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            while True:
                 try:
-                    print c['comm']
-                    gdb.execute(c['comm'])
-                except gdb.error as e:
-                    print str(e)
-            elif c['op'] == 'go':
-                try:
-                    if gdb.selected_inferior().pid == 0:
-                        print 'r'
-                        gdb.execute('r')
+                    c = self.sock.recv()
+                except IOError:
+                    print "Connection to VIM reset by peer.  Continuing as normal GDB session."
+                    self.detach_hooks()
+                    return
+                if c['op'] == 'exec':
+                    try:
+                        print c['comm']
+                        gdb.execute(c['comm'])
+                    except gdb.error as e:
+                        print str(e)
+                elif c['op'] == 'go':
+                    try:
+                        if gdb.selected_inferior().pid == 0:
+                            print 'r'
+                            gdb.execute('r')
+                        else:
+                            print 'c'
+                            gdb.execute('c')
+                    except gdb.error as e:
+                        print str(e)
+                elif c['op'] == 'eval':
+                    try:
+                        value = gdb.parse_and_eval(c['expr'])
+
+                    except gdb.error as e:
+                        contents = { c['expr']: { str(e): "" } }
+
                     else:
-                        print 'c'
-                        gdb.execute('c')
-                except gdb.error as e:
-                    print str(e)
-            elif c['op'] == 'eval':
-                try:
-                    value = gdb.parse_and_eval(c['expr'])
+                        contents = gdb_to_py(c['expr'], value)
 
-                except gdb.error as e:
-                    contents = { c['expr']: { str(e): "" } }
+                    if len(contents) == 1:
+                        expr, value = contents.items()[0]
+                        c['expr'] = expr
+                        contents = value
+                    self.vim(op='tree', expr=c['expr'], contents=contents)
+                elif c['op'] == 'locals':
+                    expr = 'locals'
+                    variables = [ 'this' ]
+                    variables += [ a.split(' = ', 1)[0] for a in gdb.execute("info args", to_string=True).split('\n')[:-1] ]
+                    variables += [ l.split(' = ', 1)[0] for l in gdb.execute("info locals", to_string=True).split('\n')[:-1] ]
+                    contents = {}
+                    for var in variables:
+                        try:
+                            value = gdb.parse_and_eval(var)
 
-                else:
+                        except gdb.error as e:
+                            if var != 'this':
+                                contents = dict(contents, **{ var: { str(e): "" } })
 
-                    contents = gdb_to_py(c['expr'], value)
-                if len(contents) == 1:
-                    expr, value = contents.items()[0]
-                    c['expr'] = expr
-                    contents = value
-                self.vim(op='tree', expr=c['expr'], contents=contents)
-            elif c['op'] == 'disable':
-                self.disable_breakpoints(*c['loc'])
-            elif c['op'] == 'toggle':
-                self.toggle_breakpoints(*c['loc'])
-            elif c['op'] == 'goto':
-                self.toggle_breakpoints(*c['loc'])
-            elif c['op'] == 'quit':
-                gdb.execute('quit')
-            if not self.sock.poll():
-                return
+                        else:
+                            contents = dict(contents, **gdb_to_py(var, value))
+
+                    self.vim(op='tree', expr=expr, contents=contents)
+                elif c['op'] == 'disable':
+                    self.disable_breakpoints(*c['loc'])
+                elif c['op'] == 'toggle':
+                    self.toggle_breakpoints(*c['loc'])
+                elif c['op'] == 'goto':
+                    self.toggle_breakpoints(*c['loc'])
+                elif c['op'] == 'quit':
+                    gdb.execute('quit')
+                if not self.sock.poll():
+                    return
+        finally:
+            signal.signal(signal.SIGINT, sigint_handler)
 
     def goto_frame(self, frame):
         filename, line = self.to_loc(frame.find_sal())
@@ -347,6 +382,11 @@ class RemoteGdb(object):
 
     def eval_expr(self, expr):
         self.send_command(op='eval', expr=str(expr))
+        self.send_trap()
+        self.handle_events()
+
+    def get_locals(self):
+        self.send_command(op='locals')
         self.send_trap()
         self.handle_events()
 
