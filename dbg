@@ -12,13 +12,16 @@ launch () {
         pts="/dev/$(ps -o tty= --pid=$pid)"
     else
         current_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
+        this_tty=$(ps -o tty= --pid $$)
+        this_pane=$(tmux list-panes -F '#{pane_tty} #{pane_id}' | grep "$this_tty" | awk '{ print $2 }')
+        tmux select-pane -t $this_pane
         cmd=
         for arg in "$@"; do
             cmd="$cmd \"$arg\""
         done
         if [ -z "$horizontal" ]; then
             tmux split-window -p 30 "$cmd"
-            tmux swap-pane -s $current_pane
+            tmux swap-pane -s $this_pane
         else
             tmux split-window -h "$cmd"
         fi
