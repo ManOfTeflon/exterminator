@@ -49,7 +49,7 @@ echo > $pts
 
 tmux select-pane -t $current_pane
 
-gdb -ex "tty $pts" -x $exe_dir/gdb_fancy.py -args "$@"
+gdb -ex "tty $pts" -x $exe_dir/exterminator.py -args "$@"
 
 kill $owned 2>/dev/null
 
