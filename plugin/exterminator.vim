@@ -1,8 +1,10 @@
+let g:exterminator_dir = expand("<sfile>:p:h:h")
+
 python << EOF
 
 import vim
 import sys, os, json, time
-sys.path.insert(0, os.path.join(vim.eval("expand('<sfile>:p:h:h')"), 'lib'))
+sys.path.insert(0, os.path.join(vim.eval("g:exterminator_dir"), 'lib'))
 import exterminator
 
 vim.gdb = None
@@ -23,20 +25,9 @@ def InitRemoteGdb(host, port):
 EOF
 
 function! StartDebugger(...)
-    Rooter
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')
-    exec 'silent ! tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . expand('<sfile>:p:h:h') . '/lib/exterminate '. join(a:000, ' ') . '"'
-    " if len(v:servername) == 0
-    "     python InitRemoteGdbWithFile(vim.eval("g:exterminator_file"))
-    " endif
-    unlet g:exterminator_file
-    wincmd =
+    exec 'silent ! tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . g:exterminator_dir . '/lib/exterminate '. join(a:000, ' ') . '"'
 endfunction
-
-if exists('g:exterminator_file')
-    python InitRemoteGdb(vim.eval("g:exterminator_file"))
-    unlet g:exterminator_file
-endif
 
 comm! -nargs=0 GdbToggle    python vim.gdb is None or vim.gdb.toggle_break(vim.current.buffer.name, vim.current.range.start + 1)
 comm! -nargs=0 GdbContinue  python vim.gdb is None or vim.gdb.send_continue()
