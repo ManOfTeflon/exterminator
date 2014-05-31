@@ -441,6 +441,8 @@ def ProxyConnection(vim_conn, gdb_conn):
             os.kill(os.getppid(), signal.SIGTERM)
         except SystemExit:
             raise
+        except select.error:
+            pass
         except:
             import traceback
             traceback.print_exc()
