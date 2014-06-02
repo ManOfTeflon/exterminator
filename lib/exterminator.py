@@ -2,20 +2,22 @@ import os, signal, select, json
 from multiprocessing import Process, Pipe
 from multiprocessing.connection import Listener, Client
 
-def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
+def gdb_to_py(name, value, found=None, fullname=None, typename=None, is_referenced=False):
     if found is None:
         found = { '0x0': 'nullptr' }
     if fullname is None:
         fullname = name
-    elif separator not in [ True, False ]:
-        fullname = fullname + separator + name
+    elif not is_referenced:
+        fullname = fullname + name
     t = value.type
+
+    if typename is None:
+        typename = str(t)
+
     try:
         s = (u"%s" % value).encode('utf8')
     except gdb.error as e:
-        return { "%s (%s)" % (name, t): { str(e) : "" } }
-
-    tn = str(t)
+        return { "%s (%s)" % (name, typename): { str(e) : "" } }
 
     if t.code == gdb.TYPE_CODE_TYPEDEF:
         t = t.strip_typedefs()
@@ -23,7 +25,7 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
     if t.code == gdb.TYPE_CODE_PTR:
         if s in found.keys():
             if t.target().code != gdb.TYPE_CODE_INT and t.target().code != gdb.TYPE_CODE_BOOL:
-                return { "%s (%s)" % (name, tn): { found[s]: "" } }
+                return { "%s (%s)" % (name, typename): { found[s]: "" } }
         else:
             found[s] = fullname
 
@@ -37,45 +39,62 @@ def gdb_to_py(name, value, found=None, fullname=None, separator='.'):
                     except UnicodeDecodeError:
                         pass
                 s = '"%s"' % s.encode("unicode-escape")
-                return { "%s (%s)" % (name, tn): { s : "" } }
+                return { "%s (%s)" % (name, typename): { s : "" } }
             except gdb.error as e:
-                return { "%s (%s)" % (name, tn): { str(e) : "" } }
+                return { "%s (%s)" % (name, typename): { str(e) : "" } }
             except gdb.MemoryError as e:
-                return { "%s (%s)" % (name, tn): { str(e) : "" } }
+                return { "%s (%s)" % (name, typename): { str(e) : "" } }
 
-        t = t.target()
-        fullname = fullname + '->'
         try:
-            return gdb_to_py(name, value.dereference(), found, fullname, False)
+            return gdb_to_py(name, value.dereference(), found, fullname, typename, True)
         except gdb.error as e:
-            return { "%s (%s)" % (name, tn): { str(e) : "" } }
+            return { "%s (%s)" % (name, typename): { str(e) : "" } }
     elif t.code == gdb.TYPE_CODE_REF:
         if s in found.keys():
-            return { "%s (%s)" % (name, tn): { found[s]: "" } }
+            return { "%s (%s)" % (name, typename): { found[s]: "" } }
         found[s] = fullname
         t = t.target()
 
     if t.code == gdb.TYPE_CODE_STRUCT:
+        if is_referenced:
+            fullname += '->'
+        else:
+            fullname += '.'
         contents = {}
         for field in t.fields():
-            separator_to_use = '' if separator is False else '.'
             if not field.is_base_class:
                 try:
                     child = value[field.name]
-                    this = gdb_to_py(field.name, child, found, fullname, separator_to_use)
+                    this = gdb_to_py(field.name, child, found, fullname)
                 except gdb.error as e:
-                    this = { "%s (%s)" % (name, tn): { str(e) : "" } }
+                    this = { "%s (%s)" % (field.name, field.type): { str(e) : "" } }
             else:
                 try:
                     child = value.cast(field.type)
-                    this = gdb_to_py(field.name, child, found, fullname, separator_to_use)
+                    this = gdb_to_py(field.name, child, found, fullname)
                 except gdb.error as e:
-                    this = { "%s (%s)" % (name, tn): { str(e) : "" } }
-                separator_to_use = True
+                    this = { "%s (%s)" % (field.name, field.type): { str(e) : "" } }
             contents = dict(contents, **this)
-        return { "%s (%s)" % (name, tn): contents }
+        return { "%s (%s)" % (name, typename): contents }
+
+    elif t.code == gdb.TYPE_CODE_ARRAY and t.target().unqualified() != 'char':
+        size = t.sizeof / t.target().sizeof
+        contents = {}
+        elem_typename = str(t.target())
+        for i in xrange(min(size, 10)):
+            elem_name = "[%d]" % (i)
+            try:
+                child = value[i]
+                this = gdb_to_py(elem_name, child, found, fullname)
+            except gdb.error as e:
+                this = { "%s (%s)" % (elem_name, elem_typename): { str(e) : "" } }
+            contents = dict(contents, **this)
+        if size > 10:
+            contents["%d more..." % (size - 10)] = ""
+        return { "%s (%s)" % (name, typename): contents }
+
     else:
-        return { "%s (%s)" % (name, tn): { s: "" } }
+        return { "%s (%s)" % (name, typename): { s: "" } }
 
 class Gdb(object):
     def __init__(self, sock, proxy):
@@ -95,7 +114,7 @@ class Gdb(object):
         assert hello['op'] == 'init', str(hello)
 
         if self.vim_tmux_pane:
-            os.system('tmux send-keys -t %s "\x1b\x1b:GdbConnect" ENTER' % (self.vim_tmux_pane))
+            os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbConnect\')" ENTER' % (self.vim_tmux_pane))
 
         gdb.execute("set pagination off")
 
@@ -126,7 +145,7 @@ class Gdb(object):
         p = dict({'dest': 'vim'}, **kwargs)
         self.sock.send(p)
         if self.vim_tmux_pane and p['dest'] == 'vim' and p['op'] != 'quit':
-            os.system('tmux send-keys -t %s "\x1b\x1b:GdbRefresh" ENTER' % (self.vim_tmux_pane))
+            os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbRefresh\')" ENTER' % (self.vim_tmux_pane))
 
     def handle_events(self):
         if not self.sock.poll():

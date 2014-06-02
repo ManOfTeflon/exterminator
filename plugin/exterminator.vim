@@ -24,6 +24,12 @@ function! StartDebugger(...)
     exec 'silent ! tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . g:exterminator_dir . '/lib/exterminate '. join(a:000, ' ') . '"'
 endfunction
 
+function! HistPreserve(cmd)
+    call histdel("cmd", -1)
+    echo ""
+    exec a:cmd
+endfunction
+
 comm! -nargs=0 GdbToggle    python vim.gdb is None or vim.gdb.toggle_break(vim.current.buffer.name, vim.current.range.start + 1)
 comm! -nargs=0 GdbContinue  python vim.gdb is None or vim.gdb.send_continue()
 comm! -nargs=0 GdbNext      python vim.gdb is None or vim.gdb.send_next()
