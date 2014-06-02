@@ -77,7 +77,7 @@ def gdb_to_py(name, value, found=None, fullname=None, typename=None, is_referenc
             contents = dict(contents, **this)
         return { "%s (%s)" % (name, typename): contents }
 
-    elif t.code == gdb.TYPE_CODE_ARRAY and t.target().unqualified() != 'char':
+    elif t.code == gdb.TYPE_CODE_ARRAY and str(t.target().unqualified()) != 'char':
         size = t.sizeof / t.target().sizeof
         contents = {}
         elem_typename = str(t.target())
