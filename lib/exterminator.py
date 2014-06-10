@@ -190,7 +190,16 @@ class Gdb(object):
                         expr, value = contents.items()[0]
                         c['expr'] = expr
                         contents = value
-                    self.vim(op='response', expr=c['expr'], contents=contents, request_id=c['request_id'])
+                    self.vim(op='response', request_id=c['request_id'], expr=c['expr'], contents=contents)
+                elif c['op'] == 'bt':
+                    bt = []
+                    frame = gdb.newest_frame()
+                    while frame is not None:
+                        filename, line = self.to_loc(frame.find_sal())
+                        if filename is not None and line is not None:
+                            bt.append((filename, line, str(frame.name())))
+                        frame = frame.older()
+                    self.vim(op='response', request_id=c['request_id'], bt=bt)
                 elif c['op'] == 'disable':
                     self.disable_breakpoints(*c['loc'])
                 elif c['op'] == 'toggle':
@@ -416,6 +425,14 @@ class RemoteGdb(object):
             lines = traceback.format_exc().split('\n')
             p = len("%d" % len(lines))
             return { "Python error": { "%0*d: %s" % (p, i, line): {} for i, line in enumerate(lines) } }
+
+    def show_backtrace(self):
+        request_id = self.send_command(op='bt')
+        response = self.get_response(request_id)
+        my_llist = self.vim.List([{ 'filename': filename, 'lnum': line, 'text': contents } for filename, line, contents in response['bt'] ])
+        setloclist = self.vim.Function('setloclist')
+        setloclist(0, my_llist)
+        self.vim.command('lopen')
 
     def claim_window(self, window_name):
         self.vim.command('let b:mandrews_output_window = "%s"' % window_name)
