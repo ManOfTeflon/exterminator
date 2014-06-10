@@ -1,81 +1,73 @@
-import os, signal, select, json
+import os, signal, select, json, time
 from multiprocessing import Process, Pipe
 from multiprocessing.connection import Listener, Client
 
-def gdb_to_py(name, value, found=None, fullname=None, typename=None, is_referenced=False):
-    if found is None:
-        found = { '0x0': 'nullptr' }
+def char_ptr_to_py(value):
+    try:
+        s = "Cannot decode object"
+        for encoding in [ 'utf8', 'ascii' ]:
+            try:
+                s = '"%s"' % value.string(encoding).encode("unicode-escape")
+                break
+            except UnicodeDecodeError:
+                pass
+        return { s : {} }
+    except gdb.error as e:
+        return { str(e) : {} }
+    except gdb.MemoryError as e:
+        return { str(e) : {} }
+
+def gdb_to_py(name, value, fullname=None):
+    t = value.type
+    typename = str(t)
+
     if fullname is None:
         fullname = name
-    elif not is_referenced:
-        fullname = fullname + name
-    t = value.type
-
-    if typename is None:
-        typename = str(t)
+        name = "%s (%s)" % (name, typename)
 
     try:
         s = (u"%s" % value).encode('utf8')
     except gdb.error as e:
-        return { "%s (%s)" % (name, typename): { str(e) : "" } }
+        return { name: { str(e) : {} } }
 
     if t.code == gdb.TYPE_CODE_TYPEDEF:
         t = t.strip_typedefs()
 
     if t.code == gdb.TYPE_CODE_PTR:
-        if s in found.keys():
-            if t.target().code != gdb.TYPE_CODE_INT and t.target().code != gdb.TYPE_CODE_BOOL:
-                return { "%s (%s)" % (name, typename): { found[s]: "" } }
-        else:
-            found[s] = fullname
+        if s == '0x0':
+            return { name: { "nullptr": {} } }
 
         if str(t.target().unqualified()) == 'char':
-            try:
-                s = "Cannot decode object"
-                for encoding in [ 'utf8', 'ascii' ]:
-                    try:
-                        s = '%s' % value.string(encoding)
-                        break
-                    except UnicodeDecodeError:
-                        pass
-                s = '"%s"' % s.encode("unicode-escape")
-                return { "%s (%s)" % (name, typename): { s : "" } }
-            except gdb.error as e:
-                return { "%s (%s)" % (name, typename): { str(e) : "" } }
-            except gdb.MemoryError as e:
-                return { "%s (%s)" % (name, typename): { str(e) : "" } }
+            return { name: char_ptr_to_py(value) }
+
+        if str(t.target().unqualified()) == 'void':
+            return { name: { s : {} } }
 
         try:
-            return gdb_to_py(name, value.dereference(), found, fullname, typename, True)
+            return gdb_to_py(name, value.dereference(), '(*%s)' % fullname)
         except gdb.error as e:
-            return { "%s (%s)" % (name, typename): { str(e) : "" } }
+            return { name: { str(e) : {} } }
     elif t.code == gdb.TYPE_CODE_REF:
-        if s in found.keys():
-            return { "%s (%s)" % (name, typename): { found[s]: "" } }
-        found[s] = fullname
         t = t.target()
 
-    if t.code == gdb.TYPE_CODE_STRUCT:
-        if is_referenced:
-            fullname += '->'
-        else:
-            fullname += '.'
+    if t.code == gdb.TYPE_CODE_STRUCT or t.code == gdb.TYPE_CODE_UNION:
+        separator = '.'
         contents = {}
-        for field in t.fields():
-            if not field.is_base_class:
-                try:
-                    child = value[field.name]
-                    this = gdb_to_py(field.name, child, found, fullname)
-                except gdb.error as e:
-                    this = { "%s (%s)" % (field.name, field.type): { str(e) : "" } }
-            else:
-                try:
-                    child = value.cast(field.type)
-                    this = gdb_to_py(field.name, child, found, fullname)
-                except gdb.error as e:
-                    this = { "%s (%s)" % (field.name, field.type): { str(e) : "" } }
-            contents = dict(contents, **this)
-        return { "%s (%s)" % (name, typename): contents }
+        def struct_to_py(field):
+            contents = {}
+            for sub_field in field.type.fields():
+                sub_field_name = "%s (%s)" % (sub_field.name, sub_field.type)
+                if sub_field.is_base_class:
+                    this = { sub_field_name: "static_cast<%s >(%s)" % (sub_field.type, fullname) }
+                else:
+                    if sub_field.name:
+                        this = { sub_field_name: fullname + separator + sub_field.name }
+                    else:
+                        this = { sub_field_name: struct_to_py(sub_field) }
+                contents = dict(contents, **this)
+            return contents
+
+        return { name: struct_to_py(value) }
 
     elif t.code == gdb.TYPE_CODE_ARRAY and str(t.target().unqualified()) != 'char':
         size = t.sizeof / t.target().sizeof
@@ -83,18 +75,31 @@ def gdb_to_py(name, value, found=None, fullname=None, typename=None, is_referenc
         elem_typename = str(t.target())
         for i in xrange(min(size, 10)):
             elem_name = "[%d]" % (i)
-            try:
-                child = value[i]
-                this = gdb_to_py(elem_name, child, found, fullname)
-            except gdb.error as e:
-                this = { "%s (%s)" % (elem_name, elem_typename): { str(e) : "" } }
+            this = { "%s (%s)" % (elem_name, elem_typename): "%s[%d]" % (fullname, i) }
             contents = dict(contents, **this)
         if size > 10:
-            contents["%d more..." % (size - 10)] = ""
-        return { "%s (%s)" % (name, typename): contents }
+            contents["Show 10 more..."] = {}
+        return { name: contents }
 
     else:
-        return { "%s (%s)" % (name, typename): { s: "" } }
+        return { name: { s: {} } }
+
+def locals_to_py():
+    variables = [ 'this' ]
+    variables += [ a.split(' = ', 1)[0] for a in gdb.execute("info args", to_string=True).split('\n')[:-1] ]
+    variables += [ l.split(' = ', 1)[0] for l in gdb.execute("info locals", to_string=True).split('\n')[:-1] ]
+    contents = {}
+    for var in variables:
+        try:
+            value = gdb.parse_and_eval(var)
+
+        except gdb.error as e:
+            if var != 'this':
+                contents = dict(contents, **{ var: { str(e): {} } })
+
+        else:
+            contents = dict(contents, **gdb_to_py(var, value))
+    return contents
 
 class Gdb(object):
     def __init__(self, sock, proxy):
@@ -122,24 +127,17 @@ class Gdb(object):
         def on_prompt(prompt):
             try:
                 self.handle_events()
+                self.goto_frame(gdb.selected_frame())
+                self.mark_breakpoints()
+            except KeyboardInterrupt:
+                pass
             except:
                 import traceback
                 traceback.print_exc()
-            try:
-                self.goto_frame(gdb.selected_frame())
-            except gdb.error:
-                pass
-            self.mark_breakpoints()
         gdb.prompt_hook = on_prompt
-
-        def kill_server(e):
-            self.vim(op='quit')
-            self.vim(dest='proxy', op='quit')
-        gdb.events.exited.connect(kill_server)
 
     def dettach_hooks(self):
         gdb.prompt_hook = None
-        gdb.events.exited.connect(None)
 
     def vim(self, **kwargs):
         p = dict({'dest': 'vim'}, **kwargs)
@@ -176,38 +174,23 @@ class Gdb(object):
                     except gdb.error as e:
                         print str(e)
                 elif c['op'] == 'eval':
-                    try:
-                        value = gdb.parse_and_eval(c['expr'])
-
-                    except gdb.error as e:
-                        contents = { c['expr']: { str(e): "" } }
-
+                    if c['expr'] == 'auto':
+                        contents = { 'locals': locals_to_py() }
                     else:
-                        contents = gdb_to_py(c['expr'], value)
+                        try:
+                            value = gdb.parse_and_eval(c['expr'])
+
+                        except gdb.error as e:
+                            contents = { c['expr']: { str(e): {} } }
+
+                        else:
+                            contents = gdb_to_py(c['expr'], value)
 
                     if len(contents) == 1:
                         expr, value = contents.items()[0]
                         c['expr'] = expr
                         contents = value
-                    self.vim(op='tree', expr=c['expr'], contents=contents)
-                elif c['op'] == 'locals':
-                    expr = 'locals'
-                    variables = [ 'this' ]
-                    variables += [ a.split(' = ', 1)[0] for a in gdb.execute("info args", to_string=True).split('\n')[:-1] ]
-                    variables += [ l.split(' = ', 1)[0] for l in gdb.execute("info locals", to_string=True).split('\n')[:-1] ]
-                    contents = {}
-                    for var in variables:
-                        try:
-                            value = gdb.parse_and_eval(var)
-
-                        except gdb.error as e:
-                            if var != 'this':
-                                contents = dict(contents, **{ var: { str(e): "" } })
-
-                        else:
-                            contents = dict(contents, **gdb_to_py(var, value))
-
-                    self.vim(op='tree', expr=expr, contents=contents)
+                    self.vim(op='response', expr=c['expr'], contents=contents, request_id=c['request_id'])
                 elif c['op'] == 'disable':
                     self.disable_breakpoints(*c['loc'])
                 elif c['op'] == 'toggle':
@@ -226,63 +209,72 @@ class Gdb(object):
         self.goto_file(filename, line)
 
     def goto_file(self, filename, line):
+        assert (filename is None) == (line is None)
+        if filename is None:
+            return
         if not os.path.exists(filename):
             return
         if filename == self.filename and line == self.line:
             return
         self.filename = filename
         self.line = line
+        self.vim(op='place', num=2, name='dummy', line=line, filename=filename)
         self.vim(op='goto', line=line, filename=filename)
 
     def to_loc(self, sal):
-        return sal.symtab.filename, int(sal.line)
+        if sal is not None and sal.symtab is not None:
+            return sal.symtab.filename, int(sal.line)
+        else:
+            return None, None
 
     def get_locations(self, breakpoint):
         unparsed, locs = gdb.decode_line(breakpoint.location)
         if locs:
-            return [ self.to_loc(loc) for loc in locs ]
+            return [ self.to_loc(loc) for loc in locs if self.to_loc(loc) ]
 
     def mark_breakpoints(self):
-        if gdb.breakpoints() is None:
-            self.vim(op='unplace', num='*')
-            return
-        new_breakpoints = set([])
-        for breakpoint in gdb.breakpoints():
+        breakpoints = []
+        if gdb.breakpoints() is not None:
+            breakpoints = gdb.breakpoints()
+        new_breakpoints = {}
+        for breakpoint in breakpoints:
             for filename, line in self.get_locations(breakpoint):
-                if breakpoint.enabled:
-                    new_breakpoints.add((filename, line))
+                if filename is not None and breakpoint.enabled:
+                    new_breakpoints[(filename, line)] = 'breakpoint'
+        if self.filename is not None:
+            name = 'pc_and_breakpoint' if (self.filename, self.line) in new_breakpoints.keys() else 'just_pc'
+            new_breakpoints[(self.filename, self.line)] = name
 
         old_breakpoints = set(self.breakpoints.keys())
-        remove = old_breakpoints - new_breakpoints
-        add = new_breakpoints - old_breakpoints
-
-        for filename, line in remove:
-            self.vim(op='unplace', num=self.breakpoints[(filename, line)])
+        remove = { key: self.breakpoints[key] for key in old_breakpoints - set(new_breakpoints.keys()) }
+        for (filename, line), (num, _) in remove.iteritems():
+            self.vim(op='unplace', num=num)
             del self.breakpoints[(filename, line)]
 
-        for filename, line in add:
-            print filename, line
-            self.breakpoints[(filename, line)] = self.next_breakpoint
-            self.vim(op='place', num=self.next_breakpoint, name='breakpoint', line=line, filename=filename)
-            self.next_breakpoint += 1
-
-        if self.filename is not None and self.line is not None:
-            sign = 'pc_and_breakpoint' if (self.filename, self.line) in self.breakpoints.keys() else 'just_pc'
-            self.vim(op='unplace', num=1)
-            self.vim(op='place', num=1, name=sign, line=self.line, filename=self.filename)
+        for (filename, line), name in new_breakpoints.iteritems():
+            if (filename, line) not in self.breakpoints:
+                self.breakpoints[(filename, line)] = (self.next_breakpoint, name)
+                self.vim(op='place', num=self.next_breakpoint, name=name, line=line, filename=filename)
+                self.next_breakpoint += 1
+            else:
+                num, old_name = self.breakpoints[(filename, line)]
+                if old_name != name:
+                    self.breakpoints[(filename, line)] = (num, name)
+                    self.vim(op='replace', num=num, name=name, filename=filename)
 
     def disable_breakpoints(self, filename, line):
-        for breakpoint in gdb.breakpoints():
-            for old_filename, old_line in self.get_locations(breakpoint):
-                if (old_filename, old_line) == (filename, line):
-                    breakpoint.delete()
+        if gdb.breakpoints() is not None:
+            for breakpoint in gdb.breakpoints():
+                for old_filename, old_line in self.get_locations(breakpoint):
+                    if (old_filename, old_line) == (filename, line):
+                        breakpoint.delete()
 
     def toggle_breakpoints(self, filename, line):
         found = False
         if gdb.breakpoints() is not None:
             for breakpoint in gdb.breakpoints():
                 for old_filename, old_line in self.get_locations(breakpoint):
-                    if (old_filename, old_line) == (filename, line):
+                    if (old_filename, old_line) == (filename, line) and breakpoint.is_valid():
                         breakpoint.delete()
                         found = True
         if not found:
@@ -295,13 +287,17 @@ class RemoteGdb(object):
     def __init__(self, vim, host, port):
         self.vim = vim
         self.sock = Client((host, port))
+        self.request_id = 0
+        self.response = {}
 
     def send_command(self, **kwargs):
+        self.request_id += 1
         try:
-            self.sock.send(dict({'dest': 'gdb'}, **kwargs))
+            self.sock.send(dict(dict({'dest': 'gdb'}, **kwargs), request_id=self.request_id))
         except IOError:
             print "Broken pipe encountered sending to the proxy.  Terminating Exterminator."
             self.quit()
+        return self.request_id
 
     def handle_events(self):
         if not self.sock.poll():
@@ -330,13 +326,13 @@ class RemoteGdb(object):
                 self.vim.current.window.buffer[:] = contents
                 self.vim.command("setlocal nomodifiable")
                 self.vim.command("%swincmd w" % winnr)
-            elif c['op'] == 'tree':
-                contents = json.dumps(c['contents']).replace("'", "''")
-                expr = c['expr'].replace("'", "''")
-                self.vim.command("call NERDTreeFromJSON('%s', '%s')" % (expr, contents))
+            elif c['op'] == 'response':
+                self.response[c['request_id']] = c
             elif c['op'] == 'place':
                 self.vim.command("badd %(filename)s" % c)
                 self.vim.command("sign place %(num)s name=%(name)s line=%(line)s file=%(filename)s" % c)
+            elif c['op'] == 'replace':
+                self.vim.command("sign place %(num)s name=%(name)s file=%(filename)s" % c)
             elif c['op'] == 'unplace':
                 self.vim.command("sign unplace %(num)s" % c)
             elif c['op'] == 'quit':
@@ -369,18 +365,8 @@ class RemoteGdb(object):
         self.send_trap()
         self.handle_events()
 
-    def send_next(self):
-        self.send_command(op='exec', comm='next')
-        self.send_trap()
-        self.handle_events()
-
-    def send_step(self):
-        self.send_command(op='exec', comm='step')
-        self.send_trap()
-        self.handle_events()
-
-    def send_break(self, filename, line):
-        self.send_command(op='exec', comm='break %s:%d' % (filename, line))
+    def send_exec(self, comm):
+        self.send_command(op='exec', comm=comm)
         self.send_trap()
         self.handle_events()
 
@@ -400,14 +386,32 @@ class RemoteGdb(object):
         self.handle_events()
 
     def eval_expr(self, expr):
-        self.send_command(op='eval', expr=str(expr))
-        self.send_trap()
-        self.handle_events()
+        request_id = self.send_command(op='eval', expr=str(expr))
+        return self.get_response(request_id)
 
-    def get_locals(self):
-        self.send_command(op='locals')
-        self.send_trap()
-        self.handle_events()
+    def get_response(self, request_id):
+        start = time.time()
+        while request_id not in self.response:
+            self.send_trap()
+            try:
+                select.select([self.sock], [], [], 1)
+                self.handle_events()
+            except select.error:
+                pass
+            if time.time() - start > 5:
+                return None
+        response = self.response[request_id]
+        del self.response[request_id]
+        return response
+
+    def fetch_children(self, expr):
+        try:
+            return self.eval_expr(expr)['contents']
+        except:
+            import traceback
+            lines = traceback.format_exc().split('\n')
+            p = len("%d" % len(lines))
+            return { "Python error": { "%0*d: %s" % (p, i, line): {} for i, line in enumerate(lines) } }
 
     def claim_window(self, window_name):
         self.vim.command('let b:mandrews_output_window = "%s"' % window_name)
@@ -435,7 +439,7 @@ def HandleProxyRequest(c):
     else:
         print "Proxy packet with unknown op: " + str(c)
 
-def ProxyConnection(vim_conn, gdb_conn):
+def ProxyConnection(connection_id, vim_conn, gdb_conn):
     while True:
         try:
             for ready in select.select([vim_conn, gdb_conn], [], [])[0]:
@@ -443,35 +447,39 @@ def ProxyConnection(vim_conn, gdb_conn):
                 if c['dest'] == 'proxy':
                     HandleProxyRequest(c)
                 elif c['dest'] == 'vim':
+                    c['conn'] = connection_id
                     vim_conn.send(c)
                 elif c['dest'] == 'gdb':
+                    c['conn'] = connection_id
                     gdb_conn.send(c)
                 else:
                     print "Packet with unknown dest: " + str(c)
-        except EOFError:
-            print "EOF encountered in the proxy.  Terminating GDB."
-            try:
-                vim_conn.send({'op': 'quit', 'dest': 'vim'})
-            except IOError:
-                pass
-            os.kill(os.getppid(), signal.SIGTERM)
-        except IOError:
+        except (IOError, EOFError):
             print "Broken pipe encountered in the proxy.  Terminating GDB."
-            os.kill(os.getppid(), signal.SIGTERM)
+            try:
+                os.kill(os.getppid(), signal.SIGTERM)
+            except:
+                pass
+            exit(0)
         except SystemExit:
             raise
         except select.error:
             pass
         except:
             import traceback
-            traceback.print_exc()
+            print traceback.format_exc()
             print "Proxy continuing..."
 
 def ProxyServer(gdb_conn, address_file):
+    connection_id = 0
     try:
         server = Listener(('localhost', 0))
         open(address_file, 'w').write(json.dumps(server.address))
         gdb_conn.send({'op': 'init', 'port': server.address[1], 'host': server.address[0]})
+        def exit_proxy(a, b):
+            print "GDB has gone away.  Terminating proxy."
+            exit(0)
+        signal.signal(signal.SIGHUP, exit_proxy)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except:
         import traceback
@@ -480,7 +488,7 @@ def ProxyServer(gdb_conn, address_file):
         return
     while True:
         vim_conn = server.accept()
-        ProxyConnection(vim_conn, gdb_conn)
+        ProxyConnection(connection_id, vim_conn, gdb_conn)
         vim_conn.close()
 
 if __name__ == '__main__':

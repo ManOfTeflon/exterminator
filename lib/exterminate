@@ -1,11 +1,72 @@
 #!/bin/bash
 
+usage_message="$0 [-r] [-c core] [-p pid_file] ..."
+
 owned=
-exe_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
+
+usage () {
+    echo "$usage_message"
+    exit 1
+}
+
+parse_opt () {
+    long=$1
+    short=$2
+    opt=$3
+    next=$4
+    ret=0
+
+    var=$(echo "$long" | sed -e 's/[^-a-zA-Z_0-9]//g' -e 's/-/_/g')
+    val=
+
+    if [ "$opt" != "--${!long}" ]; then
+        val=$(echo "$opt" | sed -r "s/(-$short|--$long=)//")
+    fi
+    if [ -z "$val" ]; then
+        val=$next
+        ret=1
+    fi
+
+    eval $var="\$val"
+    return $ret
+}
+
+gdb_cmds=
+term=
+pid_file=
+core=
+while (( "$#" )); do
+    case $1 in
+        -r)
+            gdb_cmds="${gdb_cmds}r
+"
+            ;;
+        -t*|--term=*|--term)
+            if ! parse_opt term t $@; then
+                shift
+            fi
+            ;;
+        -p*|--pid-file=*|--pid-file)
+            if ! parse_opt pid-file p $@; then
+                shift
+            fi
+            ;;
+        -c*|--core=*|--core)
+            if ! parse_opt core c $@; then
+                shift
+            fi
+            ;;
+        *)
+            break ;;
+    esac
+    shift
+done
+if (( ! "$#" )); then usage; fi
 
 launch () {
-    if [ -n "$DBG_NO_TMUX" ]; then
-        parent=$($exe_dir/daemon urxvt -e "$@")
+    if [ -n "$term" ]; then
+        parent=$($exe_dir/daemon $term -e "$@")
         pid=
         while [ -z "$pid" ]; do pid=$(pgrep -P $parent); done
         owned="$owned $parent"
@@ -22,7 +83,8 @@ launch () {
             tmux split-window -p 30 "$cmd"
             tmux swap-pane -s $this_pane
         else
-            tmux split-window -h "$cmd"
+            tmux split-window -h -p 30 "$cmd"
+            tmux swap-pane -s $this_pane
         fi
         new_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_pid} #{pane_tty} #{pane_id}' | grep active | awk '{ print $2, $3 }')
         owned="$owned $(echo $new_pane | awk '{ print $1 }')"
@@ -33,11 +95,8 @@ launch () {
 current_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
 
 if [ -z "$EXTERMINATOR_FILE" ]; then
-    VIM_SERVERNAME="DBG.$$"
-    file=$(mktemp)
-    horizontal=1 launch vim -c "let g:session_autoload='no'" -c "let g:exterminator_file='$file'"
-else
-    file=$EXTERMINATOR_FILE
+    export EXTERMINATOR_FILE=$(mktemp)
+    horizontal=1 launch vim -c "let g:session_autoload='no'" -c "let g:exterminator_file='$EXTERMINATOR_FILE'"
 fi
 
 export VIM_TMUX_PANE=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
@@ -49,8 +108,25 @@ echo > $pts
 
 tmux select-pane -t $current_pane
 
-gdb -ex "tty $pts" -x $exe_dir/exterminator.py -args "$@"
+gdb_file=$(mktemp)
+echo "tty $pts" >> $gdb_file
+if [ -n "$pid_file" ]; then
+    echo "define hookpost-run" >> $gdb_file
+    echo "echo running" >> $gdb_file
+    echo "python open('$pid_file', 'w').write(str(gdb.selected_inferior().pid))" >> $gdb_file
+    echo "end" >> $gdb_file
+fi
+echo $gdb_cmds >> $gdb_file
+
+clear
+if [ -z "$core" ]; then
+    gdb -x $exe_dir/exterminator.py -x $gdb_file -args "$@"
+else
+    gdb -x $exe_dir/exterminator.py -x $gdb_file -core $core "$@"
+fi
 
 kill $owned 2>/dev/null
 
-rm $file
+rm $EXTERMINATOR_FILE
+rm $gdb_file
+

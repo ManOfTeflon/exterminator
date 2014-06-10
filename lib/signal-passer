@@ -5,8 +5,11 @@ import signal, os, sys, subprocess, time, atexit
 g_pid = None
 
 def kill_child_processes(parent_pid, signum):
-    for pid in subprocess.check_output("pgrep -P %d" % g_pid, shell=True).split():
-        os.kill(int(pid), signum)
+    try:
+        for pid in subprocess.check_output("pgrep -P %d" % g_pid, shell=True).split():
+            os.kill(int(pid), signum)
+    except:
+        exit(0)
 
 def pass_along(signum, frame):
     kill_child_processes(g_pid, signum)
