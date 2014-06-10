@@ -127,7 +127,7 @@ class Gdb(object):
         def on_prompt(prompt):
             try:
                 self.handle_events()
-                self.goto_frame(gdb.selected_frame())
+                self.goto_selected_frame()
                 self.mark_breakpoints()
             except KeyboardInterrupt:
                 pass
@@ -204,7 +204,11 @@ class Gdb(object):
         finally:
             signal.signal(signal.SIGINT, sigint_handler)
 
-    def goto_frame(self, frame):
+    def goto_selected_frame(self):
+        try:
+            frame = gdb.selected_frame()
+        except gdb.error:
+            return # no frame selected
         filename, line = self.to_loc(frame.find_sal())
         self.goto_file(filename, line)
 

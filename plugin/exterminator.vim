@@ -23,9 +23,6 @@ function! StartDebugger(...)
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')
     let exe = join(a:000, ' ')
     let exterminate = g:exterminator_dir . '/lib/exterminate'
-    if $TMUX != ''
-        let exterminate = exterminate . ' -t'
-    endif
     exec 'silent ! tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . exterminate . ' ' . exe . '"'
 endfunction
 
