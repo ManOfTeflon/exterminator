@@ -46,7 +46,7 @@ comm! -nargs=0                      GdbLocals    call NERDTreeFromJSON('locals',
 comm! -nargs=0                      GdbBacktrace python vim.gdb is None or vim.gdb.show_backtrace()
 
 comm! -nargs=0                      GdbContinue  python vim.gdb is None or vim.gdb.send_continue()
-comm! -nargs=0                      GdbToggle    python vim.gdb is None or vim.gdb.toggle_break(vim.eval("expand('%')"), int(vim.eval("line('.')")))
+comm! -nargs=0                      GdbToggle    python vim.gdb is None or vim.gdb.toggle_break(vim.eval("expand('%:p')"), int(vim.eval("line('.')")))
 comm! -nargs=0                      GdbNext      GdbExec next
 comm! -nargs=0                      GdbStep      GdbExec step
 comm! -nargs=0                      GdbQuit      python vim.gdb is None or vim.gdb.quit()

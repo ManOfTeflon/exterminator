@@ -1,6 +1,7 @@
 import os, signal, select, json, time
 from multiprocessing import Process, Pipe
 from multiprocessing.connection import Listener, Client
+from pysigset import suspended_signals
 
 def char_ptr_to_py(value):
     try:
@@ -55,7 +56,7 @@ def gdb_to_py(name, value, fullname=None):
         contents = {}
         def struct_to_py(field):
             contents = {}
-            for sub_field in field.type.fields():
+            for sub_field in field.fields():
                 sub_field_name = "%s (%s)" % (sub_field.name, sub_field.type)
                 if sub_field.is_base_class:
                     this = { sub_field_name: "static_cast<%s >(%s)" % (sub_field.type, fullname) }
@@ -63,11 +64,11 @@ def gdb_to_py(name, value, fullname=None):
                     if sub_field.name:
                         this = { sub_field_name: fullname + separator + sub_field.name }
                     else:
-                        this = { sub_field_name: struct_to_py(sub_field) }
+                        this = { sub_field_name: struct_to_py(sub_field.type) }
                 contents = dict(contents, **this)
             return contents
 
-        return { name: struct_to_py(value) }
+        return { name: struct_to_py(t) }
 
     elif t.code == gdb.TYPE_CODE_ARRAY and str(t.target().unqualified()) != 'char':
         size = t.sizeof / t.target().sizeof
@@ -125,16 +126,25 @@ class Gdb(object):
 
     def attach_hooks(self):
         def on_prompt(prompt):
-            try:
-                self.handle_events()
-                self.goto_selected_frame()
-                self.mark_breakpoints()
-            except KeyboardInterrupt:
-                pass
-            except:
-                import traceback
-                traceback.print_exc()
+            with suspended_signals(signal.SIGINT):
+                try:
+                    self.handle_events()
+                    self.goto_selected_frame()
+                    self.mark_breakpoints()
+                except:
+                    import traceback
+                    traceback.print_exc()
         gdb.prompt_hook = on_prompt
+
+        def on_cont(event):
+            with suspended_signals(signal.SIGINT):
+                try:
+                    self.filename, self.line = None, None
+                    self.mark_breakpoints()
+                except:
+                    import traceback
+                    traceback.print_exc()
+        gdb.events.cont.connect(on_cont)
 
     def dettach_hooks(self):
         gdb.prompt_hook = None
@@ -146,72 +156,67 @@ class Gdb(object):
             os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbRefresh\')" ENTER' % (self.vim_tmux_pane))
 
     def handle_events(self):
-        if not self.sock.poll():
-            return
-        sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        try:
-            while True:
+        while self.sock.poll():
+            try:
+                c = self.sock.recv()
+            except IOError:
+                print "Connection to VIM reset by peer.  Continuing as normal GDB session."
+                self.detach_hooks()
+                return
+            if c['op'] == 'exec':
                 try:
-                    c = self.sock.recv()
-                except IOError:
-                    print "Connection to VIM reset by peer.  Continuing as normal GDB session."
-                    self.detach_hooks()
-                    return
-                if c['op'] == 'exec':
-                    try:
-                        print c['comm']
-                        gdb.execute(c['comm'])
-                    except gdb.error as e:
-                        print str(e)
-                elif c['op'] == 'go':
-                    try:
-                        if gdb.selected_inferior().pid == 0:
-                            print 'r'
-                            gdb.execute('r')
-                        else:
-                            print 'c'
-                            gdb.execute('c')
-                    except gdb.error as e:
-                        print str(e)
-                elif c['op'] == 'eval':
-                    if c['expr'] == 'auto':
-                        contents = { 'locals': locals_to_py() }
+                    print c['comm']
+                    gdb.execute(c['comm'])
+                except gdb.error as e:
+                    print str(e)
+            elif c['op'] == 'go':
+                try:
+                    if gdb.selected_inferior().pid == 0:
+                        print 'r'
+                        gdb.execute('r')
                     else:
-                        try:
-                            value = gdb.parse_and_eval(c['expr'])
+                        print 'c'
+                        gdb.execute('c')
+                except gdb.error as e:
+                    print str(e)
+            elif c['op'] == 'eval':
+                if c['expr'] == 'auto':
+                    print 'info locals'
+                    contents = { 'locals': locals_to_py() }
+                else:
+                    print 'eval ' + c['expr']
+                    try:
+                        value = gdb.parse_and_eval(c['expr'])
 
-                        except gdb.error as e:
-                            contents = { c['expr']: { str(e): {} } }
+                    except gdb.error as e:
+                        contents = { c['expr']: { str(e): {} } }
 
-                        else:
-                            contents = gdb_to_py(c['expr'], value)
+                    else:
+                        contents = gdb_to_py(c['expr'], value)
 
-                    if len(contents) == 1:
-                        expr, value = contents.items()[0]
-                        c['expr'] = expr
-                        contents = value
-                    self.vim(op='response', request_id=c['request_id'], expr=c['expr'], contents=contents)
-                elif c['op'] == 'bt':
-                    bt = []
-                    frame = gdb.newest_frame()
-                    while frame is not None:
-                        filename, line = self.to_loc(frame.find_sal())
-                        if filename is not None and line is not None:
-                            bt.append((filename, line, str(frame.name())))
-                        frame = frame.older()
-                    self.vim(op='response', request_id=c['request_id'], bt=bt)
-                elif c['op'] == 'disable':
-                    self.disable_breakpoints(*c['loc'])
-                elif c['op'] == 'toggle':
-                    self.toggle_breakpoints(*c['loc'])
-                elif c['op'] == 'goto':
-                    self.toggle_breakpoints(*c['loc'])
-                elif c['op'] == 'quit':
-                    gdb.execute('quit')
-                if not self.sock.poll():
-                    return
-        finally:
-            signal.signal(signal.SIGINT, sigint_handler)
+                if len(contents) == 1:
+                    expr, value = contents.items()[0]
+                    c['expr'] = expr
+                    contents = value
+                self.vim(op='response', request_id=c['request_id'], expr=c['expr'], contents=contents)
+            elif c['op'] == 'bt':
+                print 'bt'
+                bt = []
+                frame = gdb.newest_frame()
+                while frame is not None:
+                    filename, line = self.to_loc(frame.find_sal())
+                    if filename is not None and line is not None:
+                        bt.append((filename, line, str(frame.name())))
+                    frame = frame.older()
+                self.vim(op='response', request_id=c['request_id'], bt=bt)
+            elif c['op'] == 'disable':
+                self.disable_breakpoints(*c['loc'])
+            elif c['op'] == 'toggle':
+                self.toggle_breakpoints(*c['loc'])
+            elif c['op'] == 'goto':
+                self.toggle_breakpoints(*c['loc'])
+            elif c['op'] == 'quit':
+                gdb.execute('quit')
 
     def goto_selected_frame(self):
         try:
