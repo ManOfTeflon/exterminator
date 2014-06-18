@@ -205,8 +205,13 @@ class Gdb(object):
                 frame = gdb.newest_frame()
                 while frame is not None:
                     filename, line = self.to_loc(frame.find_sal())
-                    if filename is not None and line is not None:
-                        bt.append((filename, line, str(frame.name())))
+                    if filename is None or line is None:
+                        filename = ""
+                        line = 0
+                        name = "Unknown"
+                    else:
+                        name = frame.name()
+                    bt.append((filename, line, name))
                     frame = frame.older()
                 self.vim(op='response', request_id=c['request_id'], bt=bt)
             elif c['op'] == 'disable':
@@ -438,15 +443,16 @@ class RemoteGdb(object):
         setloclist = self.vim.Function('setloclist')
         setloclist(0, my_llist)
         self.vim.command('lopen')
+        self.vim.command('GdbBindBufferToFrame')
 
     def claim_window(self, window_name):
-        self.vim.command('let b:mandrews_output_window = "%s"' % window_name)
+        self.vim.command('let w:mandrews_output_window = "%s"' % window_name)
 
     def find_window(self, window_name, new_command=None):
         winnr = int(self.vim.eval("winnr()"))
         while True:
-            if int(self.vim.eval("exists('b:mandrews_output_window')")) > 0:
-                if str(self.vim.eval("b:mandrews_output_window")) == window_name:
+            if int(self.vim.eval("exists('w:mandrews_output_window')")) > 0:
+                if str(self.vim.eval("w:mandrews_output_window")) == window_name:
                     break
             self.vim.command("wincmd w")
             if winnr == int(self.vim.eval("winnr()")):

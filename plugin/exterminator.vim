@@ -40,21 +40,22 @@ endfunction
 
 let g:NERDTreePlugin = s:Plugin
 
-comm! -nargs=1                      GdbExec      python vim.gdb is None or vim.gdb.send_exec(<f-args>)
-comm! -nargs=1                      GdbEval      call NERDTreeFromJSON(<f-args>, <f-args>)
-comm! -nargs=0                      GdbLocals    call NERDTreeFromJSON('locals', 'auto')
-comm! -nargs=0                      GdbBacktrace python vim.gdb is None or vim.gdb.show_backtrace()
+comm! -nargs=1                      GdbExec                 python vim.gdb is None or vim.gdb.send_exec(<f-args>)
+comm! -nargs=1                      GdbEval                 call NERDTreeFromJSON(<f-args>, <f-args>)
+comm! -nargs=0                      GdbLocals               call NERDTreeFromJSON('locals', 'auto')
+comm! -nargs=0                      GdbBacktrace            python vim.gdb is None or vim.gdb.show_backtrace()
 
-comm! -nargs=0                      GdbContinue  python vim.gdb is None or vim.gdb.send_continue()
-comm! -nargs=0                      GdbToggle    python vim.gdb is None or vim.gdb.toggle_break(vim.eval("expand('%:p')"), int(vim.eval("line('.')")))
-comm! -nargs=0                      GdbNext      GdbExec next
-comm! -nargs=0                      GdbStep      GdbExec step
-comm! -nargs=0                      GdbQuit      python vim.gdb is None or vim.gdb.quit()
+comm! -nargs=0                      GdbContinue             python vim.gdb is None or vim.gdb.send_continue()
+comm! -nargs=0                      GdbToggle               python vim.gdb is None or vim.gdb.toggle_break(vim.eval("expand('%:p')"), int(vim.eval("line('.')")))
+comm! -nargs=0                      GdbNext                 GdbExec next
+comm! -nargs=0                      GdbStep                 GdbExec step
+comm! -nargs=0                      GdbQuit                 python vim.gdb is None or vim.gdb.quit()
+comm! -nargs=0                      GdbBindBufferToFrame    nnoremap <buffer> <cr> :exec "GdbExec f " . string(line(".") - 1)<cr><cr>
 
-comm! -nargs=0                      GdbRefresh   python vim.gdb is None or vim.gdb.handle_events()
-comm! -nargs=0                      GdbConnect   python InitRemoteGdb()
+comm! -nargs=0                      GdbRefresh              python vim.gdb is None or vim.gdb.handle_events()
+comm! -nargs=0                      GdbConnect              python InitRemoteGdb()
 
-comm! -nargs=+ -complete=shellcmd   Dbg          call StartDebugger(<f-args>)
+comm! -nargs=+ -complete=shellcmd   Dbg                     call StartDebugger(<f-args>)
 
 highlight SignColumn guibg=Black guifg=White ctermbg=None ctermfg=White
 
