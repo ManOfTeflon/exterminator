@@ -36,6 +36,7 @@ class RemoteGdb(object):
                 self.vim.command("buffer %(filename)s" % c)
                 self.vim.command("%(line)s" % c)
                 self.vim.command("%(line)skP" % c)
+                self.vim.command("norm zz")
             elif c['op'] == 'disp':
                 winnr = int(self.vim.eval("winnr()"))
                 window = self.find_window('display', 'bot 15new')
