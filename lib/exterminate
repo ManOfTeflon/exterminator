@@ -1,6 +1,6 @@
 #!/bin/bash
 
-usage_message="$0 [-r] [-c core] [-p pid_file] ..."
+usage_message="$0 [-r] [-l log] [-c core] [-p pid_file] ..."
 
 owned=
 exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
@@ -36,6 +36,7 @@ gdb_cmds=
 term=
 pid_file=
 core=
+log=
 while (( "$#" )); do
     case $1 in
         -r)
@@ -44,6 +45,11 @@ while (( "$#" )); do
             ;;
         -t*|--term=*|--term)
             if ! parse_opt term t $@; then
+                shift
+            fi
+            ;;
+        -l*|--log=*|--log)
+            if ! parse_opt log l $@; then
                 shift
             fi
             ;;
@@ -103,8 +109,12 @@ export VIM_TMUX_PANE=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' |
 
 launch $exe_dir/signal-passer $$
 
-echo Debugging in $(pwd): $@ > $pts
-echo > $pts
+if [ -n "$log" ]; then
+    cat $log > $pts
+else
+    echo Debugging in $(pwd): $@ > $pts
+    echo > $pts
+fi
 
 tmux select-pane -t $current_pane
 
