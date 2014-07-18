@@ -95,7 +95,7 @@ def gdb_to_py(name, value):
         finish = int(str(value['_M_impl']['_M_finish'].cast(void_p)), 16)
         length = finish - start
         if length == 0:
-            return name, 'empty', None
+            return name, fullname, 'empty', None
         new_type = t.template_argument(0).array(length - 1)
         return name, fullname + '._M_impl._M_start', value['_M_impl']['_M_start'].cast(new_type), new_type
 

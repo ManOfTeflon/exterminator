@@ -38,7 +38,7 @@ function! s:Plugin.FetchChildren(str)
     return ret
 endfunction
 
-let g:NERDTreePlugin = s:Plugin
+let g:NERDTreeGDBPlugin = s:Plugin
 
 comm! -nargs=1                      GdbExec                 python vim.gdb is None or vim.gdb.send_exec(<f-args>)
 comm! -nargs=1                      GdbEval                 python vim.gdb is None or vim.gdb.track_expr(<f-args>)

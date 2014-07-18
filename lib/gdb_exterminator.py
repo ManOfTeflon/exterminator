@@ -48,6 +48,7 @@ class Gdb(object):
         def on_cont(event):
             with suspended_signals(signal.SIGINT):
                 try:
+                    print 'cont'
                     self.refresh_expr = True
                     self.filename, self.line = None, None
                     self.mark_breakpoints()
@@ -138,6 +139,7 @@ class Gdb(object):
     def send_expr(self):
         try:
             if self.last_frame != gdb.selected_frame():
+                print 'new frame'
                 self.refresh_expr = True
                 self.last_frame = gdb.selected_frame()
         except:

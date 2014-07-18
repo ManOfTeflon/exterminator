@@ -1,3 +1,4 @@
+import os
 import time
 import select
 from multiprocessing.connection import Client
@@ -32,6 +33,7 @@ class RemoteGdb(object):
                 window = self.find_window('navigation')
                 if window is None:
                     self.claim_window('navigation')
+                c['filename'] = os.path.abspath(c['filename'])
                 self.vim.command('badd %(filename)s' % c)
                 self.vim.command("buffer %(filename)s" % c)
                 self.vim.command("%(line)s" % c)
@@ -48,9 +50,11 @@ class RemoteGdb(object):
             elif c['op'] == 'response':
                 self.response[c['request_id']] = c
             elif c['op'] == 'refresh':
+                GDBPlugin = self.vim.bindeval('g:NERDTreeGDBPlugin')
                 NERDTreeFromJSON = self.vim.Function('NERDTreeFromJSON')
-                NERDTreeFromJSON(c['expr'])
+                NERDTreeFromJSON(c['expr'], GDBPlugin)
             elif c['op'] == 'place':
+                c['filename'] = os.path.abspath(c['filename'])
                 self.vim.command("badd %(filename)s" % c)
                 self.vim.command("sign place %(num)s name=%(name)s line=%(line)s file=%(filename)s" % c)
             elif c['op'] == 'replace':
@@ -133,8 +137,9 @@ class RemoteGdb(object):
 
     def track_expr(self, expr):
         if expr is not None:
+            GDBPlugin = self.vim.bindeval('g:NERDTreeGDBPlugin')
             NERDTreeFromJSON = self.vim.Function('NERDTreeFromJSON')
-            NERDTreeFromJSON(expr)
+            NERDTreeFromJSON(expr, GDBPlugin)
         self.send_command(op='track', expr=expr)
 
     def show_backtrace(self):

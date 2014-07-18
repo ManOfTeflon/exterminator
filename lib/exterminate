@@ -28,7 +28,7 @@ parse_opt () {
         ret=1
     fi
 
-    eval $var="\$val"
+    eval "$var=\"$val\""
     return $ret
 }
 
