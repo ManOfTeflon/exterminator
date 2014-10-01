@@ -53,7 +53,7 @@ def gdb_to_py(name, value):
                 else:
                     if sub_field.name:
                         try:
-                            assert is_one_liner(value[sub_field.name], sub_type)
+                            assert(is_one_liner(value[sub_field.name], sub_type))
                             this = gdb_to_py(sub_field.name, value[sub_field.name])
                         except gdb.error as e:
                             this = { sub_field_name + ': ' + str(e): 0 }

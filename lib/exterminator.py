@@ -10,7 +10,7 @@ def HandleProxyRequest(c):
     elif c['op'] == 'quit':
         exit(0)
     else:
-        print "Proxy packet with unknown op: " + str(c)
+        print("Proxy packet with unknown op: " + str(c))
 
 def ProxyConnection(connection_id, vim_conn, gdb_conn):
     while True:
@@ -26,9 +26,9 @@ def ProxyConnection(connection_id, vim_conn, gdb_conn):
                     c['conn'] = connection_id
                     gdb_conn.send(c)
                 else:
-                    print "Packet with unknown dest: " + str(c)
+                    print("Packet with unknown dest: " + str(c))
         except (IOError, EOFError):
-            print "Broken pipe encountered in the proxy.  Terminating GDB."
+            print("Broken pipe encountered in the proxy.  Terminating GDB.")
             try:
                 os.kill(os.getppid(), signal.SIGTERM)
             except:
@@ -40,8 +40,8 @@ def ProxyConnection(connection_id, vim_conn, gdb_conn):
             pass
         except:
             import traceback
-            print traceback.format_exc()
-            print "Proxy continuing..."
+            print(traceback.format_exc())
+            print("Proxy continuing...")
 
 def ProxyServer(gdb_conn, address_file):
     connection_id = 0
@@ -50,14 +50,14 @@ def ProxyServer(gdb_conn, address_file):
         open(address_file, 'w').write(json.dumps(server.address))
         gdb_conn.send({'op': 'init', 'port': server.address[1], 'host': server.address[0]})
         def exit_proxy(a, b):
-            print "GDB has gone away.  Terminating proxy."
+            print("GDB has gone away.  Terminating proxy.")
             exit(0)
         signal.signal(signal.SIGHUP, exit_proxy)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except:
         import traceback
         traceback.print_exc()
-        print "Aborting proxy"
+        print("Aborting proxy")
         return
     while True:
         vim_conn = server.accept()
