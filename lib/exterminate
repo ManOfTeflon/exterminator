@@ -1,6 +1,6 @@
 #!/bin/bash
 
-usage_message="$0 [-r] [-l log] [-c core] [-p pid_file] ..."
+usage_message="$0 [-s] [-l log] [-p pid_file] [-P port] ..."
 
 owned=
 exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
@@ -32,17 +32,13 @@ parse_opt () {
     return $ret
 }
 
-gdb_cmds=
 term=
 pid_file=
-core=
 log=
+sudo=
+port=
 while (( "$#" )); do
     case $1 in
-        -r)
-            gdb_cmds="${gdb_cmds}r
-"
-            ;;
         -t*|--term=*|--term)
             if ! parse_opt term t $@; then
                 shift
@@ -58,26 +54,54 @@ while (( "$#" )); do
                 shift
             fi
             ;;
-        -c*|--core=*|--core)
-            if ! parse_opt core c $@; then
+        -P*|--port=*|--port)
+            if ! parse_opt port P $@; then
                 shift
             fi
+            sudo="yes"
             ;;
+        -s)
+            sudo="yes"
+            ;;
+        --)
+            shift
+            break ;;
         *)
             break ;;
     esac
     shift
 done
-if (( ! "$#" )); then usage; fi
 
+declare -a params=( "$@" )
+
+if [ -n "$port" ]; then
+    pid=$(fuser $port/tcp 2>/dev/null)
+    if [ -z "$pid" ]; then
+        echo "No process on port $port" 1>&2
+        exit 1
+    fi
+    params+=( "-p" "$pid" )
+fi
+
+if (( ! "${#params[@]}" )); then usage; fi
+
+# Returns in $owned and $pts
+#
 launch () {
+    declare pid=
+    declare parent=
+
     if [ -n "$term" ]; then
         parent=$($exe_dir/daemon $term -e "$@")
-        pid=
         while [ -z "$pid" ]; do pid=$(pgrep -P $parent); done
         owned="$owned $parent"
         pts="/dev/$(ps -o tty= --pid=$pid)"
     else
+        declare this_tty=
+        declare this_pane=
+        declare new_pane=
+        declare cmd=
+
         this_tty=$(ps -o tty= --pid $$)
         this_pane=$(tmux list-panes -F '#{pane_tty} #{pane_id}' | grep "$this_tty" | awk '{ print $2 }')
         tmux select-pane -t $this_pane
@@ -126,13 +150,12 @@ if [ -n "$pid_file" ]; then
     echo "python open('$pid_file', 'w').write(str(gdb.selected_inferior().pid))" >> $gdb_file
     echo "end" >> $gdb_file
 fi
-echo $gdb_cmds >> $gdb_file
 
 clear
-if [ -z "$core" ]; then
-    gdb -x $exe_dir/exterminator.py -x $gdb_file -args "$@"
+if [ -z "$sudo" ]; then
+    gdb -x $exe_dir/exterminator.py -x $gdb_file "${params[@]}"
 else
-    gdb -x $exe_dir/exterminator.py -x $gdb_file -core $core "$@"
+    sudo -E gdb -x $exe_dir/exterminator.py -x $gdb_file "${params[@]}"
 fi
 
 kill $owned 2>/dev/null
