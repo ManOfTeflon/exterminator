@@ -1,3 +1,4 @@
+import json
 import os
 import gdb
 import signal
@@ -22,7 +23,7 @@ class Gdb(object):
         self.expr = None
         self.last_frame = None
 
-        hello = self.sock.recv()
+        hello = json.loads(self.sock.recv_bytes().decode('utf-8'))
         assert(hello['op'] == 'init'), str(hello)
 
         if self.vim_tmux_pane:
@@ -62,7 +63,7 @@ class Gdb(object):
 
     def vim(self, **kwargs):
         p = dict({'dest': 'vim'}, **kwargs)
-        self.sock.send(p)
+        self.sock.send_bytes(json.dumps(p).encode('utf-8'))
 
     def signal(self):
         if self.vim_tmux_pane:
@@ -71,7 +72,7 @@ class Gdb(object):
     def handle_events(self):
         while self.sock.poll():
             try:
-                c = self.sock.recv()
+                c = json.loads(self.sock.recv_bytes().decode('utf-8'))
             except IOError:
                 print("Connection to VIM reset by peer.  Continuing as normal GDB session.")
                 self.detach_hooks()

@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import select
@@ -13,7 +14,7 @@ class RemoteGdb(object):
     def send_command(self, **kwargs):
         self.request_id += 1
         try:
-            self.sock.send(dict(dict({'dest': 'gdb'}, **kwargs), request_id=self.request_id))
+            self.sock.send_bytes(json.dumps(dict(dict({'dest': 'gdb'}, **kwargs), request_id=self.request_id)).encode('utf-8'))
         except IOError:
             print "Broken pipe encountered sending to the proxy.  Terminating Exterminator."
             self.quit()
@@ -24,7 +25,7 @@ class RemoteGdb(object):
             return
         while True:
             try:
-                c = self.sock.recv()
+                c = json.loads(self.sock.recv_bytes().decode('utf-8'))
             except (IOError, EOFError):
                 print "Lost connection to GDB"
                 self.quit()

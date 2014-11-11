@@ -16,15 +16,16 @@ def ProxyConnection(connection_id, vim_conn, gdb_conn):
     while True:
         try:
             for ready in select.select([vim_conn, gdb_conn], [], [])[0]:
-                c = ready.recv()
+                c_data = ready.recv_bytes()
+                c = json.loads(c_data.decode('utf-8'))
                 if c['dest'] == 'proxy':
                     HandleProxyRequest(c)
                 elif c['dest'] == 'vim':
                     c['conn'] = connection_id
-                    vim_conn.send(c)
+                    vim_conn.send_bytes(c_data)
                 elif c['dest'] == 'gdb':
                     c['conn'] = connection_id
-                    gdb_conn.send(c)
+                    gdb_conn.send_bytes(c_data)
                 else:
                     print("Packet with unknown dest: " + str(c))
         except (IOError, EOFError):
@@ -48,7 +49,7 @@ def ProxyServer(gdb_conn, address_file):
     try:
         server = Listener(('localhost', 0))
         open(address_file, 'w').write(json.dumps(server.address))
-        gdb_conn.send({'op': 'init', 'port': server.address[1], 'host': server.address[0]})
+        gdb_conn.send_bytes(json.dumps({'op': 'init', 'port': server.address[1], 'host': server.address[0]}).encode('utf-8'))
         def exit_proxy(a, b):
             print("GDB has gone away.  Terminating proxy.")
             exit(0)
