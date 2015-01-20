@@ -56,8 +56,9 @@ class RemoteGdb(object):
                 NERDTreeFromJSON(c['expr'], GDBPlugin)
             elif c['op'] == 'place':
                 c['filename'] = os.path.abspath(c['filename'])
-                self.vim.command("badd %(filename)s" % c)
-                self.vim.command("sign place %(num)s name=%(name)s line=%(line)s file=%(filename)s" % c)
+                self.vim.command("badd %s" % c['filename'].replace('$', '\\$'))
+                c['bufnr'] = self.vim.eval("bufnr('%(filename)s')" % c)
+                self.vim.command("sign place %(num)s name=%(name)s line=%(line)s buffer=%(bufnr)s" % c)
             elif c['op'] == 'replace':
                 self.vim.command("sign place %(num)s name=%(name)s file=%(filename)s" % c)
             elif c['op'] == 'unplace':
