@@ -69,7 +69,7 @@ if __name__ == '__main__':
     gdb_sock, gdb_proxy = Pipe(True)
     exterminator_file = os.environ['EXTERMINATOR_FILE']
 
-    proxy = Process(target=ProxyServer, args=(gdb_proxy, exterminator_file))
+    proxy = Process(target=ProxyServer, args=(gdb_proxy, exterminator_file), daemon=True)
     proxy.start()
 
     gdb_manager = Gdb(gdb_sock, proxy)

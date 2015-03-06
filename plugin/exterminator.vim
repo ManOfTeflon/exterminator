@@ -57,7 +57,7 @@ comm! -nargs=0                      GdbBindBufferToFrame    nnoremap <buffer> <c
 comm! -nargs=0                      GdbRefresh              python vim.gdb is None or vim.gdb.handle_events()
 comm! -nargs=0                      GdbConnect              python InitRemoteGdb()
 
-comm! -nargs=+ -complete=shellcmd   Dbg                     call StartDebugger(<f-args>)
+comm! -nargs=+ -complete=shellcmd   Dbg                     call StartDebugger('--args',<f-args>)
 
 highlight SignColumn guibg=Black guifg=White ctermbg=None ctermfg=White
 
