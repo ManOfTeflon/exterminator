@@ -23,7 +23,7 @@ function! StartDebugger(...)
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')
     let exe = join(a:000, ' ')
     let exterminate = g:exterminator_dir . '/lib/exterminate'
-    exec 'silent ! tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . exterminate . ' ' . exe . '"'
+    call system('tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . exterminate . ' ' . exe . '"')
 endfunction
 
 function! HistPreserve(cmd)
@@ -41,7 +41,7 @@ endfunction
 let g:NERDTreeGDBPlugin = s:Plugin
 
 comm! -nargs=1                      GdbExec                 python vim.gdb is None or vim.gdb.send_exec(<f-args>)
-comm! -nargs=1                      GdbEval                 python vim.gdb is None or vim.gdb.track_expr(<f-args>)
+comm! -nargs=1                      GdbEval                 python vim.gdb is None or vim.gdb.print_expr(<f-args>)
 comm! -nargs=0                      GdbLocals               python vim.gdb is None or vim.gdb.track_expr('auto')
 comm! -nargs=0                      GdbNoTrack              python vim.gdb is None or vim.gdb.track_expr(None)
 comm! -nargs=0                      GdbBacktrace            python vim.gdb is None or vim.gdb.show_backtrace()

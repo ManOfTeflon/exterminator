@@ -2,19 +2,17 @@ import json
 import os
 import gdb
 import signal
+import atexit
 from pysigset_exterminator import suspended_signals
 
 from gdb_values import gdb_to_py, locals_to_py
 
 class Gdb(object):
-    def __init__(self, sock, proxy):
-        try:
-            self.vim_tmux_pane = os.environ['VIM_TMUX_PANE']
-        except KeyError:
-            self.vim_tmux_pane = None
+    def __init__(self, sock, proxy, vim_tmux_pane):
         self.sock = sock
         self.next_breakpoint = 2
         self.proxy = proxy
+        self.vim_tmux_pane = vim_tmux_pane
 
         self.breakpoints = { }
         self.filename = None
@@ -30,6 +28,20 @@ class Gdb(object):
             os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbConnect\')" ENTER' % (self.vim_tmux_pane))
 
         gdb.execute("set pagination off")
+        gdb.execute("set print pretty on")
+
+        try:
+            gdb.execute("bt")
+
+            # Skip up out of any internal frames (i.e. assertion failures)
+            frame = gdb.newest_frame()
+            frame_num = 0
+            while frame is not None and frame.name().startswith('__'):
+                frame = frame.older()
+                frame_num += 1
+            gdb.execute("f %d" % frame_num)
+        except:
+            pass
 
     def attach_hooks(self):
         def on_prompt(prompt):
@@ -57,6 +69,12 @@ class Gdb(object):
                     import traceback
                     traceback.print_exc()
         gdb.events.cont.connect(on_cont)
+
+        def on_exit():
+            with suspended_signals(signal.SIGINT):
+                print >>open('/dev/pts/6', 'wb+'), ('exit')
+                self.signal()
+        atexit.register(on_exit)
 
     def dettach_hooks(self):
         gdb.prompt_hook = None

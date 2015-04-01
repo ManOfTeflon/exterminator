@@ -1,6 +1,6 @@
 #!/bin/bash
 
-usage_message="$0 [-s] [-l log] [-p pid_file] [-P port] ..."
+usage_message="$0 [-s] [-l log] [-p pid_file] [--lock lock_file] [-P port] ..."
 
 owned=
 exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
@@ -36,6 +36,7 @@ term=
 pid_file=
 log=
 sudo=
+lock=
 port=
 while (( "$#" )); do
     case $1 in
@@ -59,6 +60,11 @@ while (( "$#" )); do
                 shift
             fi
             sudo="yes"
+            ;;
+        --lock=*|--lock)
+            if ! parse_opt lock - $@; then
+                shift
+            fi
             ;;
         -s)
             sudo="yes"
@@ -131,11 +137,11 @@ fi
 
 export VIM_TMUX_PANE=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
 
-launch $exe_dir/signal-passer $$
-
 if [ -n "$log" ]; then
-    cat $log > $pts
+    launch vi -u "$exe_dir/.vimrc.pager" "$log"
 else
+    launch $exe_dir/signal-passer $$
+
     echo Debugging in $(pwd): $@ > $pts
     echo > $pts
 fi
@@ -143,7 +149,9 @@ fi
 tmux select-pane -t $current_pane
 
 gdb_file=$(mktemp)
-echo "tty $pts" >> $gdb_file
+if [ -z "$log" ]; then
+    echo "tty $pts" >> $gdb_file
+fi
 if [ -n "$pid_file" ]; then
     echo "define hookpost-run" >> $gdb_file
     echo "echo running" >> $gdb_file
@@ -152,6 +160,11 @@ if [ -n "$pid_file" ]; then
 fi
 
 clear
+if [ -n "$lock" ]; then
+    echo "Waiting for '$lock'"
+    flock $lock echo -n
+fi
+
 if [ -z "$sudo" ]; then
     gdb -x $exe_dir/exterminator.py -x $gdb_file "${params[@]}"
 else

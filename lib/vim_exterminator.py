@@ -144,6 +144,11 @@ class RemoteGdb(object):
             NERDTreeFromJSON(expr, GDBPlugin)
         self.send_command(op='track', expr=expr)
 
+    def print_expr(self, expr):
+        GDBPlugin = self.vim.bindeval('g:NERDTreeGDBPlugin')
+        NERDTreeFromJSON = self.vim.Function('NERDTreeFromJSON')
+        NERDTreeFromJSON(expr, GDBPlugin)
+
     def show_backtrace(self):
         request_id = self.send_command(op='bt')
         response = self.get_response(request_id)

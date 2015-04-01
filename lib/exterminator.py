@@ -44,7 +44,7 @@ def ProxyConnection(connection_id, vim_conn, gdb_conn):
             print(traceback.format_exc())
             print("Proxy continuing...")
 
-def ProxyServer(gdb_conn, address_file):
+def ProxyServer(gdb_conn, address_file, vim_tmux_pane):
     connection_id = 0
     try:
         server = Listener(('localhost', 0))
@@ -52,6 +52,8 @@ def ProxyServer(gdb_conn, address_file):
         gdb_conn.send_bytes(json.dumps({'op': 'init', 'port': server.address[1], 'host': server.address[0]}).encode('utf-8'))
         def exit_proxy(a, b):
             print("GDB has gone away.  Terminating proxy.")
+            if vim_tmux_pane:
+                os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbRefresh\')" ENTER' % (vim_tmux_pane))
             exit(0)
         signal.signal(signal.SIGHUP, exit_proxy)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -68,10 +70,14 @@ def ProxyServer(gdb_conn, address_file):
 if __name__ == '__main__':
     gdb_sock, gdb_proxy = Pipe(True)
     exterminator_file = os.environ['EXTERMINATOR_FILE']
+    try:
+        vim_tmux_pane = os.environ['VIM_TMUX_PANE']
+    except KeyError:
+        vim_tmux_pane = None
 
-    proxy = Process(target=ProxyServer, args=(gdb_proxy, exterminator_file), daemon=True)
+    proxy = Process(target=ProxyServer, args=(gdb_proxy, exterminator_file, vim_tmux_pane), daemon=True)
     proxy.start()
 
-    gdb_manager = Gdb(gdb_sock, proxy)
+    gdb_manager = Gdb(gdb_sock, proxy, vim_tmux_pane)
     gdb_manager.attach_hooks()
 
