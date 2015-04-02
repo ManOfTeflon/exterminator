@@ -75,7 +75,8 @@ if __name__ == '__main__':
     except KeyError:
         vim_tmux_pane = None
 
-    proxy = Process(target=ProxyServer, args=(gdb_proxy, exterminator_file, vim_tmux_pane), daemon=True)
+    proxy = Process(target=ProxyServer, args=(gdb_proxy, exterminator_file, vim_tmux_pane))
+    proxy.daemon = True
     proxy.start()
 
     gdb_manager = Gdb(gdb_sock, proxy, vim_tmux_pane)
