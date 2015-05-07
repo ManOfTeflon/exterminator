@@ -1,0 +1,11 @@
+
+    +----------------------------------------------------------------------+
+    |  Welcome to your exterminator shell!                                 |
+    |                                                                      |
+    |    To use exterminator, launch gdb then run 'exterminate' from       |
+    |    within.  Connect from your local VIM by running GdbConnect.  The  |
+    |    exact command will already be in your clipboard.                  |
+    |                                                                      |
+    |  Happy debugging!                                                    |
+    +----------------------------------------------------------------------+
+

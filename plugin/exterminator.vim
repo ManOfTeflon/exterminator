@@ -9,13 +9,26 @@ import vim_exterminator
 
 vim.gdb = None
 
-def InitRemoteGdb():
-    try:
-        host, port = json.loads(open(vim.eval('g:exterminator_file'), 'r').read())
-        vim.gdb = vim_exterminator.RemoteGdb(vim, host, port)
+def InitRemoteGdb(host_port=None):
+    if host_port is None:
+        try:
+            exterminator_file = vim.eval('g:exterminator_file')
+            host, port = json.loads(open(exterminator_file, 'r').read())
+        except Exception as e:
+            vim.command("echoerr 'Problem encountered initializing GDB from file %s: %s'" % (exterminator_file, str(e)))
         vim.command("unlet g:exterminator_file")
+    else:
+        try:
+            host, port = host_port.split(':')
+            host = '127.0.0.1' if not host else host
+            port = int(port)
+        except:
+            vim.command("echoerr 'Could not parse integer: %s'" % port)
+    try:
+        vim.gdb = vim_exterminator.RemoteGdb(vim, host, port)
+        vim.gdb.set_tmux_pane()
     except:
-        vim.command("echoerr 'Problem encountered initializing GDB from file ' . g:exterminator_file")
+        vim.command("echoerr 'Could not connect to %s:%d'" % (host, port))
 
 EOF
 
@@ -55,7 +68,7 @@ comm! -nargs=0                      GdbQuit                 python vim.gdb is No
 comm! -nargs=0                      GdbBindBufferToFrame    nnoremap <buffer> <cr> :exec "GdbExec f " . string(line(".") - 1)<cr><cr>
 
 comm! -nargs=0                      GdbRefresh              python vim.gdb is None or vim.gdb.handle_events()
-comm! -nargs=0                      GdbConnect              python InitRemoteGdb()
+comm! -nargs=?                      GdbConnect              python InitRemoteGdb(<f-args>)
 
 comm! -nargs=+ -complete=shellcmd   GdbStartDebugger        call StartDebugger(<f-args>)
 comm! -nargs=+ -complete=shellcmd   Dbg                     call StartDebugger('-ex r', '--args', <f-args>)

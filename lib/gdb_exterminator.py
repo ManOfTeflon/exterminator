@@ -8,11 +8,9 @@ from pysigset_exterminator import suspended_signals
 from gdb_values import gdb_to_py, locals_to_py
 
 class Gdb(object):
-    def __init__(self, sock, proxy, vim_tmux_pane):
+    def __init__(self, sock):
         self.sock = sock
         self.next_breakpoint = 2
-        self.proxy = proxy
-        self.vim_tmux_pane = vim_tmux_pane
 
         self.breakpoints = { }
         self.filename = None
@@ -21,11 +19,12 @@ class Gdb(object):
         self.expr = None
         self.last_frame = None
 
-        hello = json.loads(self.sock.recv_bytes().decode('utf-8'))
+        try:
+            hello = json.loads(self.sock.recv_packet().decode('utf-8'))
+        except EOFError:
+            print("Failed to receive a hello packet.  Exiting exterminator.")
+            raise
         assert(hello['op'] == 'init'), str(hello)
-
-        if self.vim_tmux_pane:
-            os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbConnect\')" ENTER' % (self.vim_tmux_pane))
 
         gdb.execute("set pagination off")
         gdb.execute("set print pretty on")
@@ -51,6 +50,10 @@ class Gdb(object):
                     self.goto_selected_frame()
                     self.mark_breakpoints()
                     self.send_expr()
+                except (IOError, EOFError):
+                    print("Connection to VIM reset by peer.  Continuing as normal GDB session.")
+                    self.detach_hooks()
+                    return
                 except:
                     import traceback
                     traceback.print_exc()
@@ -65,6 +68,10 @@ class Gdb(object):
                     self.refresh_expr = True
                     self.filename, self.line = None, None
                     self.mark_breakpoints()
+                except (IOError, EOFError):
+                    print("Connection to VIM reset by peer.  Continuing as normal GDB session.")
+                    self.detach_hooks()
+                    return
                 except:
                     import traceback
                     traceback.print_exc()
@@ -72,29 +79,29 @@ class Gdb(object):
 
         def on_exit():
             with suspended_signals(signal.SIGINT):
-                print >>open('/dev/pts/6', 'wb+'), ('exit')
                 self.signal()
         atexit.register(on_exit)
 
-    def dettach_hooks(self):
+    def detach_hooks(self):
         gdb.prompt_hook = None
 
     def vim(self, **kwargs):
         p = dict({'dest': 'vim'}, **kwargs)
-        self.sock.send_bytes(json.dumps(p).encode('utf-8'))
+        self.sock.send_packet(json.dumps(p).encode('utf-8'))
 
     def signal(self):
-        if self.vim_tmux_pane:
-            os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbRefresh\')" ENTER' % (self.vim_tmux_pane))
+        self.vim(op='trap', target='vim', dest='proxy')
 
     def handle_events(self):
         while self.sock.poll():
             try:
-                c = json.loads(self.sock.recv_bytes().decode('utf-8'))
-            except IOError:
+                c = json.loads(self.sock.recv_packet().decode('utf-8'))
+            except (IOError, EOFError):
                 print("Connection to VIM reset by peer.  Continuing as normal GDB session.")
                 self.detach_hooks()
                 return
+            if c['dest'] != 'gdb':
+                continue
             if c['op'] == 'exec':
                 try:
                     print(c['comm'])

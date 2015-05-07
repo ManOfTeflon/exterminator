@@ -1,6 +1,6 @@
 #!/bin/bash
 
-usage_message="$0 [-s] [-l log] [-p pid_file] [--lock lock_file] [-P port] ..."
+usage_message="$0 [-s] [-l log] [-p pid_file] [--lock lock_file] [-P port] ...\n$0 ssh ..."
 
 owned=
 exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
@@ -31,6 +31,52 @@ parse_opt () {
     eval "$var=\"$val\""
     return $ret
 }
+
+if [ "$1" = "ssh" ]; then
+    check () {
+        "$@"
+        ret=$?
+        if [ $ret != 0 ]; then
+            exit $ret
+        fi
+    }
+    run () {
+        check ssh "${params[@]}" "$@"
+    }
+    separate () {
+        declare separator="$1"
+        shift
+        for ((i=1;i<=$#;i++)); do
+            echo -n ${!i}
+            if ((i<$#)); then
+                echo -n $separator
+            fi
+        done
+    }
+
+    shift
+    declare -a params=( "${@}" )
+    remote_dir="/tmp/exterminator"
+
+    echo "Preparing exterminator environment"
+    run rm -rf $remote_dir
+    run mkdir -p $remote_dir
+
+    host="${params[${#params[@]}-1]}"
+    declare -a scp_args=( "${params[@]}" )
+    local_path="$exe_dir/*"
+    unset scp_args[${#scp_args[@]}-1]
+
+    shopt -s dotglob
+    check scp "${scp_args[@]}" ${local_path} "${host}:${remote_dir}"
+    tunnel="{\"display\":\"$DISPLAY\",\"file\":\"$exe_dir/exterminator.py\",\"ssh\":{\"hostname\":\"127.0.0.1\",\"port\":64102}}" > /dev/null
+
+    tunnel="$(echo $tunnel | base64 -w0)"
+    ssh -R 64102:localhost:22 -t "${params[@]}" "PATH=\"$remote_dir:\$PATH\" EXTERMINATOR_TUNNEL='$tunnel' bash --rcfile <(cat ~/.bashrc $remote_dir/.bashrc)"
+
+    run rm -rf $remote_dir
+    exit 0
+fi
 
 term=
 pid_file=

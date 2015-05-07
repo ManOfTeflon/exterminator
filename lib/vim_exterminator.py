@@ -2,22 +2,24 @@ import json
 import os
 import time
 import select
+from subprocess import check_output, CalledProcessError
 from multiprocessing.connection import Client
+from protocol import ProtocolSocket
 
 class RemoteGdb(object):
     def __init__(self, vim, host, port):
         self.vim = vim
-        self.sock = Client((host, port))
+        self.sock = ProtocolSocket(Client((host, port)))
         self.request_id = 0
         self.response = {}
 
     def send_command(self, **kwargs):
         self.request_id += 1
         try:
-            self.sock.send_bytes(json.dumps(dict(dict({'dest': 'gdb'}, **kwargs), request_id=self.request_id)).encode('utf-8'))
+            self.sock.send_packet(json.dumps(dict(dict({'dest': 'gdb'}, **kwargs), request_id=self.request_id)).encode('utf-8'))
         except IOError:
             print "Broken pipe encountered sending to the proxy.  Terminating Exterminator."
-            self.quit()
+            self.quit(terminate_proxy=False)
         return self.request_id
 
     def handle_events(self):
@@ -25,51 +27,52 @@ class RemoteGdb(object):
             return
         while True:
             try:
-                c = json.loads(self.sock.recv_bytes().decode('utf-8'))
+                c = json.loads(self.sock.recv_packet().decode('utf-8'))
             except (IOError, EOFError):
                 print "Lost connection to GDB"
                 self.quit()
                 return
-            if c['op'] == 'goto':
-                window = self.find_window('navigation')
-                if window is None:
-                    self.claim_window('navigation')
-                c['filename'] = os.path.abspath(c['filename'])
-                self.vim.command('badd %(filename)s' % c)
-                self.vim.command("buffer %(filename)s" % c)
-                self.vim.command("%(line)s" % c)
-                self.vim.command("%(line)skP" % c)
-                self.vim.command("norm zz")
-            elif c['op'] == 'disp':
-                winnr = int(self.vim.eval("winnr()"))
-                window = self.find_window('display', 'bot 15new')
-                self.vim.command("setlocal buftype=nowrite bufhidden=wipe modifiable nobuflisted noswapfile nowrap nonumber")
-                contents = [ c['expr'], c['contents'] ]
-                self.vim.current.window.buffer[:] = contents
-                self.vim.command("setlocal nomodifiable")
-                self.vim.command("%swincmd w" % winnr)
-            elif c['op'] == 'response':
-                self.response[c['request_id']] = c
-            elif c['op'] == 'refresh':
-                GDBPlugin = self.vim.bindeval('g:NERDTreeGDBPlugin')
-                NERDTreeFromJSON = self.vim.Function('NERDTreeFromJSON')
-                NERDTreeFromJSON(c['expr'], GDBPlugin)
-            elif c['op'] == 'place':
-                c['filename'] = os.path.abspath(c['filename'])
-                self.vim.command("badd %s" % c['filename'].replace('$', '\\$'))
-                c['bufnr'] = self.vim.eval("bufnr('%(filename)s')" % c)
-                self.vim.command("sign place %(num)s name=%(name)s line=%(line)s buffer=%(bufnr)s" % c)
-            elif c['op'] == 'replace':
-                self.vim.command("sign place %(num)s name=%(name)s file=%(filename)s" % c)
-            elif c['op'] == 'unplace':
-                self.vim.command("sign unplace %(num)s" % c)
-            elif c['op'] == 'quit':
-                self.quit()
-                return
+            if c['dest'] == 'vim':
+                if c['op'] == 'goto':
+                    window = self.find_window('navigation')
+                    if window is None:
+                        self.claim_window('navigation')
+                    c['filename'] = os.path.abspath(c['filename'])
+                    self.vim.command('badd %(filename)s' % c)
+                    self.vim.command("buffer %(filename)s" % c)
+                    self.vim.command("%(line)s" % c)
+                    self.vim.command("%(line)skP" % c)
+                    self.vim.command("norm zz")
+                elif c['op'] == 'disp':
+                    winnr = int(self.vim.eval("winnr()"))
+                    window = self.find_window('display', 'bot 15new')
+                    self.vim.command("setlocal buftype=nowrite bufhidden=wipe modifiable nobuflisted noswapfile nowrap nonumber")
+                    contents = [ c['expr'], c['contents'] ]
+                    self.vim.current.window.buffer[:] = contents
+                    self.vim.command("setlocal nomodifiable")
+                    self.vim.command("%swincmd w" % winnr)
+                elif c['op'] == 'response':
+                    self.response[c['request_id']] = c
+                elif c['op'] == 'refresh':
+                    GDBPlugin = self.vim.bindeval('g:NERDTreeGDBPlugin')
+                    NERDTreeFromJSON = self.vim.Function('NERDTreeFromJSON')
+                    NERDTreeFromJSON(c['expr'], GDBPlugin)
+                elif c['op'] == 'place':
+                    c['filename'] = os.path.abspath(c['filename'])
+                    self.vim.command("badd %s" % c['filename'].replace('$', '\\$'))
+                    c['bufnr'] = self.vim.eval("bufnr('%(filename)s')" % c)
+                    self.vim.command("sign place %(num)s name=%(name)s line=%(line)s buffer=%(bufnr)s" % c)
+                elif c['op'] == 'replace':
+                    self.vim.command("sign place %(num)s name=%(name)s file=%(filename)s" % c)
+                elif c['op'] == 'unplace':
+                    self.vim.command("sign unplace %(num)s" % c)
+                elif c['op'] == 'quit':
+                    self.quit()
+                    return
             if not self.sock.poll():
                 return
 
-    def quit(self):
+    def quit(self, terminate_proxy=True):
         self.vim.command("sign unplace *")
         winnr = int(self.vim.eval("winnr()"))
         window = self.find_window('display')
@@ -77,13 +80,14 @@ class RemoteGdb(object):
             self.vim.command("q")
         self.vim.command("%swincmd w" % winnr)
         self.vim.gdb = None
-        try:
-            self.send_command(dest='proxy', op='quit')
-        except:
-            pass
+        if terminate_proxy:
+            try:
+                self.send_command(dest='proxy', op='quit')
+            except:
+                pass
 
     def send_trap(self):
-        self.send_command(dest='proxy', op='trap')
+        self.send_command(dest='proxy', op='trap', target='gdb')
 
     def send_quit(self):
         self.send_command(op='quit')
@@ -112,12 +116,19 @@ class RemoteGdb(object):
         request_id = self.send_command(op='eval', expr=str(expr))
         return self.get_response(request_id)
 
+    def set_tmux_pane(self):
+        try:
+            pane = check_output([ "tmux", "display-message", "-p", "#D" ]).strip()
+            self.send_command(op='tmux_pane', dest='proxy', pane=pane)
+        except CalledProcessError as e:
+            print e
+
     def get_response(self, request_id):
         start = time.time()
         while request_id not in self.response:
             self.send_trap()
             try:
-                select.select([self.sock], [], [], 1)
+                self.sock.poll(1)
                 self.handle_events()
             except select.error:
                 pass
