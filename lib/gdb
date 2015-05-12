@@ -1,6 +1,0 @@
-#!/bin/bash
-
-exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
-
-_gdb -x "${exe_dir}/.gdbinit" "${@}"
-

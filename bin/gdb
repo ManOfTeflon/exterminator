@@ -1,0 +1,12 @@
+#!/bin/bash
+
+root_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )/.." && pwd )"
+gdb="$(IFS=:; find $PATH -maxdepth 1 -executable -type f -name gdb 2>/dev/null | head -n2 | tail -n1)"
+
+if [ -z "$gdb" ]; then
+    exit 1
+fi
+
+export PYTHONPATH="${root_dir}/python_env_linux/lib/python2.7/site-packages:$PYTHONPATH"
+$gdb -x "${root_dir}/conf/.gdbinit" "${@}"
+

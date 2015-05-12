@@ -21,10 +21,12 @@ class Gdb(object):
 
         try:
             hello = json.loads(self.sock.recv_packet().decode('utf-8'))
-        except EOFError:
+        except (IOError, EOFError):
             print("Failed to receive a hello packet.  Exiting exterminator.")
             raise
         assert(hello['op'] == 'init'), str(hello)
+        if 'error' in hello:
+            raise IOError()
 
         gdb.execute("set pagination off")
         gdb.execute("set print pretty on")

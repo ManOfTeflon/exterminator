@@ -3,7 +3,7 @@
 usage_message="$0 [-s] [-l log] [-p pid_file] [--lock lock_file] [-P port] ...\n$0 ssh ..."
 
 owned=
-exe_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )" && pwd )"
+root_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )/.." && pwd )"
 
 usage () {
     echo "$usage_message"
@@ -58,22 +58,30 @@ if [ "$1" = "ssh" ]; then
     declare -a params=( "${@}" )
     remote_dir="/tmp/exterminator"
 
-    echo "Preparing exterminator environment"
+    echo -n "Launching local server..."
+    tunnel=64103
+    EXTERMINATOR_SERVER=$tunnel python $root_dir/lib/exterminator.py &
+    echo " running on port $tunnel"
+
+    echo "Preparing exterminator folder"
     run rm -rf $remote_dir
     run mkdir -p $remote_dir
 
     host="${params[${#params[@]}-1]}"
     declare -a scp_args=( "${params[@]}" )
-    local_path="$exe_dir/*"
+    local_paths=( $root_dir/{lib,conf,bin,build} )
+    
     unset scp_args[${#scp_args[@]}-1]
 
-    shopt -s dotglob
-    check scp "${scp_args[@]}" ${local_path} "${host}:${remote_dir}"
-    tunnel="{\"display\":\"$DISPLAY\",\"file\":\"$exe_dir/exterminator.py\",\"ssh\":{\"hostname\":\"127.0.0.1\",\"port\":64102}}" > /dev/null
+    echo "Copying exterminator files"
+    scp_args="${scp_args[@]}"
+    check rsync -av -e "ssh ${scp_args}" "${local_paths[@]}" "${host}:${remote_dir}" >/dev/null
+    check rsync -av -e "ssh ${scp_args}" --include '*/' --include '*.py' --include '*.so' --exclude '*' "$root_dir/python_env_linux" "${host}:${remote_dir}" >/dev/null
 
-    tunnel="$(echo $tunnel | base64 -w0)"
-    ssh -R 64102:localhost:22 -t "${params[@]}" "PATH=\"$remote_dir:\$PATH\" EXTERMINATOR_TUNNEL='$tunnel' bash --rcfile <(cat ~/.bashrc $remote_dir/.bashrc)"
+    echo "Initializing exterminator environment"
+    ssh -R 64102:localhost:$tunnel -t "${params[@]}" "EXTERMINATOR_ROOT=\"$remote_dir\" EXTERMINATOR_TUNNEL='$tunnel' bash --rcfile <(cat ~/.bashrc $remote_dir/conf/.bashrc)"
 
+    kill %1
     run rm -rf $remote_dir
     exit 0
 fi
@@ -144,7 +152,7 @@ launch () {
     declare parent=
 
     if [ -n "$term" ]; then
-        parent=$($exe_dir/daemon $term -e "$@")
+        parent=$($root_dir/bin/daemon $term -e "$@")
         while [ -z "$pid" ]; do pid=$(pgrep -P $parent); done
         owned="$owned $parent"
         pts="/dev/$(ps -o tty= --pid=$pid)"
@@ -184,9 +192,9 @@ fi
 export VIM_TMUX_PANE=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
 
 if [ -n "$log" ]; then
-    launch vi -u "$exe_dir/.vimrc.pager" "$log"
+    launch vi -u "$root_dir/conf/.vimrc.pager" "$log"
 else
-    launch $exe_dir/signal-passer $$
+    launch $root_dir/bin/signal-passer $$
 
     echo Debugging in $(pwd): $@ > $pts
     echo > $pts
@@ -212,9 +220,9 @@ if [ -n "$lock" ]; then
 fi
 
 if [ -z "$sudo" ]; then
-    gdb -x $exe_dir/exterminator.py -x $gdb_file "${params[@]}"
+    gdb -x $root_dir/lib/exterminator.py -x $gdb_file "${params[@]}"
 else
-    sudo -E gdb -x $exe_dir/exterminator.py -x $gdb_file "${params[@]}"
+    sudo -E gdb -x $root_dir/lib/exterminator.py -x $gdb_file "${params[@]}"
 fi
 
 kill $owned 2>/dev/null

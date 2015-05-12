@@ -76,6 +76,9 @@ class ProtocolSocket(object):
         ready = select.select([self._sock], [], [], timeout)[0]
         return len(ready) > 0
 
+    def close(self):
+        self._sock.close()
+
     @staticmethod
     def select(socks, timeout=None):
         ready = select.select(socks, [], [], timeout)[0]

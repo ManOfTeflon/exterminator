@@ -35,7 +35,7 @@ EOF
 function! StartDebugger(...)
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')
     let exe = join(a:000, ' ')
-    let exterminate = g:exterminator_dir . '/lib/exterminate'
+    let exterminate = g:exterminator_dir . '/bin/exterminate'
     call system('tmux split -d -p 30 -h "EXTERMINATOR_FILE=' . g:exterminator_file . ' ' . exterminate . ' ' . exe . '"')
 endfunction
 
