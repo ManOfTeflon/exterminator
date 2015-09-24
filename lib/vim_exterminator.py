@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import time
 import select
 from subprocess import check_output, CalledProcessError
@@ -133,7 +134,7 @@ class RemoteGdb(object):
             except select.error:
                 pass
             if time.time() - start > 5:
-                return None
+                return { 'expr': "", 'contents': { 'Error: timeout': 0 } }
         response = self.response[request_id]
         del self.response[request_id]
         return response

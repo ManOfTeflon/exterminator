@@ -1,4 +1,4 @@
-import os, signal, select, json, sys
+import os, signal, select, json, sys, errno
 # import prctl
 from threading import Thread
 from multiprocessing import Process, Pipe
@@ -48,7 +48,7 @@ def ProxyConnection(connection_id, state, vim_conn, gdb_conn):
     global gdb_pid
     while True:
         try:
-            if state['shutdown']:
+            if state['shutdown'] or os.getppid() == 1:
                 output("GDB has terminated.  Ending proxy")
                 exit(0)
             for ready in ProtocolSocket.select([vim_conn, gdb_conn], timeout=1):
@@ -64,23 +64,28 @@ def ProxyConnection(connection_id, state, vim_conn, gdb_conn):
                 else:
                     output("Packet with unknown dest: " + str(c))
                 other_conn.send_packet(json.dumps(c))
-        except (IOError, EOFError):
-            output("Broken pipe encountered in the proxy.  Ending proxy.")
-            try:
-                if gdb_pid and state['gdb'] == 'managed':
-                    output("Terminating GDB.")
-                    os.kill(gdb_pid, signal.SIGTERM)
-            except:
-                pass
-            exit(0)
+        except IOError as e:
+            if e.errno != errno.EINTR:
+                break
+        except EOFError:
+            break
         except SystemExit:
             raise
-        except (select.error, DoNotForward):
+        except (select.error, DoNotForward, KeyboardInterrupt):
             pass
         except:
             import traceback
             traceback.print_exc()
             output("Proxy continuing...")
+
+    output("Broken pipe encountered in the proxy.  Ending proxy.")
+    try:
+        if gdb_pid and state['gdb'] == 'managed':
+            output("Terminating GDB.")
+            os.kill(gdb_pid, signal.SIGTERM)
+    except:
+        pass
+    exit(0)
 
 def ProxyServer(gdb_conn, address_file):
     global vim_tmux_pane

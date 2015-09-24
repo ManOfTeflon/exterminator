@@ -60,14 +60,14 @@ class ProtocolSocket(object):
     def send_packet(self, msg):
         with suspended_signals(signal.SIGINT):
             self._sock.send_bytes(struct.pack('I', len(msg)))
-            self._sock.send_bytes(msg+'\n')
+            if isinstance(msg, str):
+                msg = msg.encode('utf8')
+            self._sock.send_bytes(bytes(msg))
 
     def recv_packet(self):
         with suspended_signals(signal.SIGINT):
             size = int(struct.unpack('I', self._sock.recv_bytes(4))[0])
-            msg = self._sock.recv_bytes(size+1)
-            assert msg[-1] == '\n'
-            return msg[:-1]
+            return bytes(self._sock.recv_bytes(size))
 
     def fileno(self):
         return self._sock.fileno()

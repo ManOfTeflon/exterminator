@@ -35,16 +35,16 @@ class Gdb(object):
             gdb.execute("bt")
 
             # Skip up out of any internal frames (i.e. assertion failures)
-            frame = gdb.newest_frame()
-            frame_num = 0
+            frame = gdb.selected_frame()
             while frame is not None and frame.name().startswith('__'):
                 frame = frame.older()
-                frame_num += 1
-            gdb.execute("f %d" % frame_num)
+            if frame is not None:
+                frame.select()
         except:
             pass
 
     def attach_hooks(self):
+        previous_hook = gdb.prompt_hook
         def on_prompt(prompt):
             with suspended_signals(signal.SIGINT):
                 try:
@@ -61,6 +61,7 @@ class Gdb(object):
                     traceback.print_exc()
                 finally:
                     self.signal()
+            return previous_hook(prompt) if previous_hook else None
         gdb.prompt_hook = on_prompt
 
         def on_cont(event):
@@ -136,7 +137,7 @@ class Gdb(object):
                         contents = gdb_to_py(c['expr'], value)
 
                 if len(contents) == 1:
-                    c['expr'], contents = contents.items()[0]
+                    c['expr'], contents = list(contents.items())[0]
                 self.vim(op='response', request_id=c['request_id'], expr=c['expr'], contents=contents)
             elif c['op'] == 'bt':
                 print('bt')

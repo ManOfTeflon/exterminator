@@ -27,10 +27,15 @@ def InitRemoteGdb(host_port=None):
     try:
         vim.gdb = vim_exterminator.RemoteGdb(vim, host, port)
         vim.gdb.set_tmux_pane()
+        vim.gdb.handle_events()
     except:
         vim.command("echoerr 'Could not connect to %s:%d'" % (host, port))
 
 EOF
+
+function! GdbIsAttached()
+    return pyeval("int(vim.gdb is not None)")
+endfunction
 
 function! StartDebugger(...)
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')

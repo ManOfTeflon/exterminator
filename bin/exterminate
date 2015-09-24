@@ -6,7 +6,7 @@ owned=
 root_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )/.." && pwd )"
 
 usage () {
-    echo "$usage_message"
+    echo -e "$usage_message"
     exit 1
 }
 
@@ -76,7 +76,7 @@ if [ "$1" = "ssh" ]; then
     echo "Copying exterminator files"
     scp_args="${scp_args[@]}"
     check rsync -av -e "ssh ${scp_args}" "${local_paths[@]}" "${host}:${remote_dir}" >/dev/null
-    check rsync -av -e "ssh ${scp_args}" --include '*/' --include '*.py' --include '*.so' --exclude '*' "$root_dir/python_env_linux" "${host}:${remote_dir}" >/dev/null
+    # check rsync -av -e "ssh ${scp_args}" --include '*/' --include '*.py' --include '*.so' --exclude '*' "$root_dir/python_env_linux" "${host}:${remote_dir}" >/dev/null
 
     echo "Initializing exterminator environment"
     ssh -R 64102:localhost:$tunnel -t "${params[@]}" "EXTERMINATOR_ROOT=\"$remote_dir\" EXTERMINATOR_TUNNEL='$tunnel' bash --rcfile <(cat ~/.bashrc $remote_dir/conf/.bashrc)"
@@ -94,6 +94,9 @@ lock=
 port=
 while (( "$#" )); do
     case $1 in
+        -h|--help)
+            usage
+            ;;
         -t*|--term=*|--term)
             if ! parse_opt term t $@; then
                 shift
@@ -196,7 +199,7 @@ if [ -n "$log" ]; then
 else
     launch $root_dir/bin/signal-passer $$
 
-    echo Debugging in $(pwd): $@ > $pts
+    echo Debugging in $(pwd): gdb ${params[@]} > $pts
     echo > $pts
 fi
 

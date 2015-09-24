@@ -2,20 +2,17 @@ import gdb
 
 def get_str(value):
     try:
-        s = "Cannot decode object"
-        for encoding in [ 'utf8', 'ascii' ]:
-            try:
-                s = '"%s"' % value.string(encoding).encode("unicode-escape")
-                break
-            except UnicodeDecodeError:
-                pass
-        return s
+        try:
+            return '"%s"' % value.string("unicode-escape")
+        except UnicodeDecodeError:
+            return "Cannot decode object"
     except gdb.error as e:
         return str(e)
     except gdb.MemoryError as e:
         return str(e)
 
 def gdb_to_py(name, value):
+
     t = value.type
     typename = str(t)
 
@@ -67,10 +64,11 @@ def gdb_to_py(name, value):
         return { name: _struct_to_py(t) }
 
     def array_to_py(name, fullname, value, t):
-        size = t.sizeof / t.target().sizeof
+        assert(t.sizeof % t.target().sizeof == 0)
+        size = int(t.sizeof / t.target().sizeof)
         contents = {}
         elem_typename = str(t.target())
-        for i in xrange(min(size, 10)):
+        for i in range(min(size, 10)):
             elem_name = "[%d]" % (i)
             if is_one_liner(value[i], t.target()):
                 this = gdb_to_py(elem_name, value[i])
@@ -93,11 +91,19 @@ def gdb_to_py(name, value):
         void_p = gdb.lookup_type('void').pointer()
         start = int(str(value['_M_impl']['_M_start'].cast(void_p)), 16)
         finish = int(str(value['_M_impl']['_M_finish'].cast(void_p)), 16)
+        element_type = t.template_argument(0)
         length = finish - start
+        assert(length % element_type.sizeof == 0)
+        length = int((finish - start) / element_type.sizeof)
         if length == 0:
             return name, fullname, 'empty', None
-        new_type = t.template_argument(0).array(length - 1)
+        new_type = element_type.array(length - 1)
         return name, fullname + '._M_impl._M_start', value['_M_impl']['_M_start'].cast(new_type), new_type
+
+    def string_transform(name, fullname, value, t):
+        new_val = value['_M_dataplus']['_M_p']
+        new_type = new_val.type
+        return name, fullname + '._M_dataplus._M_p', new_val, new_type
 
     def ptr_transform(name, fullname, value, t):
         return name + (' @%s' % value), fullname, value.dereference(), t.target()
@@ -134,6 +140,10 @@ def gdb_to_py(name, value):
                    t.code == gdb.TYPE_CODE_STRUCT and
                    str(t).startswith("std::vector"),
             vector_transform),
+        (lambda value, t: t is not None and
+                   t.code == gdb.TYPE_CODE_STRUCT and
+                   str(t).startswith("std::basic_string"),
+            string_transform),
     ]
 
     converters = [
