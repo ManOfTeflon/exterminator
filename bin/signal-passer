@@ -15,8 +15,10 @@ def pass_along(signum, frame):
     kill_child_processes(g_pid, signum)
 
 def pass_along_and_die(signum, frame):
-    pass_along(signum, frame)
-    exit(0)
+    try:
+        pass_along(signum, frame)
+    finally:
+        exit(0)
 
 @atexit.register
 def wait():

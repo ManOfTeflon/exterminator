@@ -1,5 +1,18 @@
-import struct, select, signal, socket
+import struct, select, signal, socket, threading, json
 from pysigset_exterminator import suspended_signals
+
+class MalformedPacket(BaseException):
+    def __init__(self, packet, reason):
+        self._packet = packet
+        self._reason = reason
+
+    def __repr__(self):
+        return "MalformedPacket(packet=\"%s\", reason=\"%s\")" % (
+            repr(self._packet).replace('"', '\\"'),
+            repr(self._reason).replace('"', '\\"'))
+
+    def __str__(self):
+        return repr(self)
 
 class SshSocket(object):
     def __init__(self, channel):
@@ -56,18 +69,40 @@ class StdioSocket(object):
 class ProtocolSocket(object):
     def __init__(self, sock):
         self._sock = sock
+        self._lock = threading.Lock()
 
-    def send_packet(self, msg):
-        with suspended_signals(signal.SIGINT):
-            self._sock.send_bytes(struct.pack('I', len(msg)))
-            if isinstance(msg, str):
-                msg = msg.encode('utf8')
-            self._sock.send_bytes(bytes(msg))
+    def send_packet(self, **kwargs):
+        assert('dst' in kwargs.keys() and 'op' in kwargs.keys())
+        msg = json.dumps(kwargs).encode('utf8')
+        with self._lock:
+            with suspended_signals(signal.SIGINT):
+                self._sock.send_bytes(struct.pack('I', len(msg)))
+                self._sock.send_bytes(bytes(msg))
 
     def recv_packet(self):
-        with suspended_signals(signal.SIGINT):
-            size = int(struct.unpack('I', self._sock.recv_bytes(4))[0])
-            return bytes(self._sock.recv_bytes(size))
+        with self._lock:
+            with suspended_signals(signal.SIGINT):
+                size = int(struct.unpack('I', self._sock.recv_bytes(4))[0])
+                r = bytes(self._sock.recv_bytes(size))
+
+                try:
+                    r = r.decode('utf-8')
+                    r = json.loads(r)
+                    assert('dst' in r.keys() and 'op' in r.keys())
+                except UnicodeDecodeError:
+                    raise MalformedPacket(r, "failed to decode unicode")
+                except ValueError:
+                    raise MalformedPacket(r, "failed to parse json")
+                except AssertionError:
+                    raise MalformedPacket(r, "packet is lacking 'dst' or 'op' field")
+
+                return r
+
+    def recv_op(self, opname):
+        c = self.recv_packet()
+        if c['op'] != opname:
+            raise MalformedPacket(c, "expected op=\"%s\"" % (str(opname).replace('"', '\\"')))
+        return c
 
     def fileno(self):
         return self._sock.fileno()

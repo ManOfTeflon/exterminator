@@ -37,7 +37,7 @@ function! GdbIsAttached()
     return pyeval("int(vim.gdb is not None)")
 endfunction
 
-function! StartDebugger(...)
+function! s:StartDebugger(...)
     let g:exterminator_file = substitute(system('mktemp'), '\n$', '', '')
     let exe = join(a:000, ' ')
     let exterminate = g:exterminator_dir . '/bin/exterminate'
@@ -56,6 +56,25 @@ function! s:Plugin.FetchChildren(str)
     return ret
 endfunction
 
+let s:gdb_locals = 0
+function! s:ToggleLocals()
+    if s:gdb_locals
+        let s:gdb_locals = 0
+        GdbNoTrack
+    else
+        let s:gdb_locals = 1
+        GdbLocals
+    endif
+endfunction
+
+function! s:GdbFrame()
+    if v:count == 0
+        GdbBacktrace
+    else
+        exec "GdbExec frame " . string(v:count)
+    endif
+endfunction
+
 let g:NERDTreeGDBPlugin = s:Plugin
 
 comm! -nargs=1                      GdbExec                 python vim.gdb is None or vim.gdb.send_exec(<f-args>)
@@ -66,6 +85,8 @@ comm! -nargs=0                      GdbBacktrace            python vim.gdb is No
 
 comm! -nargs=0                      GdbContinue             python vim.gdb is None or vim.gdb.send_continue()
 comm! -nargs=0                      GdbToggle               python vim.gdb is None or vim.gdb.toggle_break(vim.eval("expand('%:p')"), int(vim.eval("line('.')")))
+comm! -nargs=0                      GdbToggleLocals         call s:ToggleLocals()
+comm! -nargs=0                      GdbFrame                call s:GdbFrame()
 comm! -nargs=0                      GdbNext                 GdbExec next
 comm! -nargs=0                      GdbStep                 GdbExec step
 comm! -nargs=0                      GdbUntil                python vim.gdb is None or vim.gdb.continue_until(vim.eval("expand('%:p')"), int(vim.eval("line('.')")))
@@ -75,8 +96,8 @@ comm! -nargs=0                      GdbBindBufferToFrame    nnoremap <buffer> <c
 comm! -nargs=0                      GdbRefresh              python vim.gdb is None or vim.gdb.handle_events()
 comm! -nargs=?                      GdbConnect              python InitRemoteGdb(<f-args>)
 
-comm! -nargs=+ -complete=shellcmd   GdbStartDebugger        call StartDebugger(<f-args>)
-comm! -nargs=+ -complete=shellcmd   Dbg                     call StartDebugger('-ex r', '--args', <f-args>)
+comm! -nargs=+ -complete=shellcmd   GdbStartDebugger        call s:StartDebugger(<f-args>)
+comm! -nargs=+ -complete=shellcmd   Dbg                     call s:StartDebugger('-ex r', '--args', <f-args>)
 
 highlight SignColumn guibg=Black guifg=White ctermbg=None ctermfg=White
 

@@ -1,9 +1,9 @@
-import json
 import os
 import gdb
 import signal
 import atexit
 from pysigset_exterminator import suspended_signals
+from protocol import MalformedPacket
 
 from gdb_values import gdb_to_py, locals_to_py
 
@@ -20,28 +20,15 @@ class Gdb(object):
         self.last_frame = None
 
         try:
-            hello = json.loads(self.sock.recv_packet().decode('utf-8'))
-        except (IOError, EOFError):
-            print("Failed to receive a hello packet.  Exiting exterminator.")
+            hello = self.sock.recv_op('init')
+        except (IOError, EOFError, MalformedPacket) as e:
+            print("Failed to receive a hello packet (%s).  Exiting exterminator." % e)
             raise
-        assert(hello['op'] == 'init'), str(hello)
         if 'error' in hello:
             raise IOError()
 
         gdb.execute("set pagination off")
         gdb.execute("set print pretty on")
-
-        try:
-            gdb.execute("bt")
-
-            # Skip up out of any internal frames (i.e. assertion failures)
-            frame = gdb.selected_frame()
-            while frame is not None and frame.name().startswith('__'):
-                frame = frame.older()
-            if frame is not None:
-                frame.select()
-        except:
-            pass
 
     def attach_hooks(self):
         previous_hook = gdb.prompt_hook
@@ -82,6 +69,7 @@ class Gdb(object):
 
         def on_exit():
             with suspended_signals(signal.SIGINT):
+                self.vim(op='quit', dst='proxy')
                 self.signal()
         atexit.register(on_exit)
 
@@ -89,21 +77,24 @@ class Gdb(object):
         gdb.prompt_hook = None
 
     def vim(self, **kwargs):
-        p = dict({'dest': 'vim'}, **kwargs)
-        self.sock.send_packet(json.dumps(p).encode('utf-8'))
+        p = dict({'dst': 'vim'}, **kwargs)
+        self.sock.send_packet(**p)
 
     def signal(self):
-        self.vim(op='trap', target='vim', dest='proxy')
+        self.vim(op='trap', target='vim', dst='proxy')
 
     def handle_events(self):
         while self.sock.poll():
             try:
-                c = json.loads(self.sock.recv_packet().decode('utf-8'))
+                c = self.sock.recv_packet()
             except (IOError, EOFError):
                 print("Connection to VIM reset by peer.  Continuing as normal GDB session.")
                 self.detach_hooks()
                 return
-            if c['dest'] != 'gdb':
+            except MalformedPacket as e:
+                print("Malformed packet: %s" % e)
+                continue
+            if c['dst'] != 'gdb':
                 continue
             if c['op'] == 'exec':
                 try:
@@ -138,7 +129,7 @@ class Gdb(object):
 
                 if len(contents) == 1:
                     c['expr'], contents = list(contents.items())[0]
-                self.vim(op='response', request_id=c['request_id'], expr=c['expr'], contents=contents)
+                self.vim(op='response', request_id=c['request_id'], expr=c['expr'], contents=contents, dst=c['src'])
             elif c['op'] == 'bt':
                 print('bt')
                 bt = []
@@ -153,7 +144,7 @@ class Gdb(object):
                         name = frame.name()
                     bt.append((filename, line, name))
                     frame = frame.older()
-                self.vim(op='response', request_id=c['request_id'], bt=bt)
+                self.vim(op='response', request_id=c['request_id'], bt=bt, dst=c['src'])
             elif c['op'] == 'disable':
                 self.disable_breakpoints(*c['loc'])
             elif c['op'] == 'toggle':
@@ -201,14 +192,20 @@ class Gdb(object):
 
     def to_loc(self, sal):
         if sal is not None and sal.symtab is not None:
-            return sal.symtab.filename, int(sal.line)
+            return sal.symtab.fullname(), int(sal.line)
         else:
             return None, None
 
     def get_locations(self, breakpoint):
-        unparsed, locs = gdb.decode_line(breakpoint.location)
-        if locs:
-            return [ self.to_loc(loc) for loc in locs if self.to_loc(loc) ]
+        if breakpoint.location is not None:
+            try:
+                unparsed, locs = gdb.decode_line(breakpoint.location)
+            except gdb.error:
+                pass
+            else:
+                if locs:
+                    return [ self.to_loc(loc) for loc in locs if self.to_loc(loc) ]
+        return []
 
     def mark_breakpoints(self):
         breakpoints = []

@@ -1,23 +1,24 @@
-import json
 import os
-import sys
 import time
 import select
 from subprocess import check_output, CalledProcessError
 from multiprocessing.connection import Client
-from protocol import ProtocolSocket
+from protocol import ProtocolSocket, MalformedPacket
 
 class RemoteGdb(object):
-    def __init__(self, vim, host, port):
+    def __init__(self, vim, host, port, name="vim"):
         self.vim = vim
         self.sock = ProtocolSocket(Client((host, port)))
         self.request_id = 0
         self.response = {}
+        self.name = name
+
+        self.send_command(op='name', name=name)
 
     def send_command(self, **kwargs):
         self.request_id += 1
         try:
-            self.sock.send_packet(json.dumps(dict(dict({'dest': 'gdb'}, **kwargs), request_id=self.request_id)).encode('utf-8'))
+            self.sock.send_packet(**dict(dict({'dst': 'gdb'}, **kwargs), request_id=self.request_id))
         except IOError:
             print "Broken pipe encountered sending to the proxy.  Terminating Exterminator."
             self.quit(terminate_proxy=False)
@@ -28,12 +29,15 @@ class RemoteGdb(object):
             return
         while True:
             try:
-                c = json.loads(self.sock.recv_packet().decode('utf-8'))
+                c = self.sock.recv_packet()
             except (IOError, EOFError):
                 print "Lost connection to GDB"
                 self.quit()
                 return
-            if c['dest'] == 'vim':
+            except MalformedPacket as e:
+                print "Malformed packet: %s" % e
+                continue
+            if c['dst'] == self.name:
                 if c['op'] == 'goto':
                     window = self.find_window('navigation')
                     if window is None:
@@ -83,12 +87,12 @@ class RemoteGdb(object):
         self.vim.gdb = None
         if terminate_proxy:
             try:
-                self.send_command(dest='proxy', op='quit')
+                self.send_command(dst='proxy', op='quit')
             except:
                 pass
 
     def send_trap(self):
-        self.send_command(dest='proxy', op='trap', target='gdb')
+        self.send_command(dst='proxy', op='trap', target='gdb')
 
     def send_quit(self):
         self.send_command(op='quit')
@@ -120,7 +124,7 @@ class RemoteGdb(object):
     def set_tmux_pane(self):
         try:
             pane = check_output([ "tmux", "display-message", "-p", "#D" ]).strip()
-            self.send_command(op='tmux_pane', dest='proxy', pane=pane)
+            self.send_command(op='tmux_pane', dst='proxy', pane=pane)
         except CalledProcessError as e:
             print e
 

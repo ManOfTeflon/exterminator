@@ -1,10 +1,10 @@
 import os, signal, select, json, sys, errno
 # import prctl
-from threading import Thread
-from multiprocessing import Process, Pipe
+from threading import Lock, Thread
+from multiprocessing import Pipe
 from multiprocessing.connection import Listener, Client
 sys.path.insert(0, os.path.dirname(__file__))
-from protocol import ProtocolSocket
+from protocol import ProtocolSocket, MalformedPacket
 
 vim_tmux_pane = ''
 
@@ -12,6 +12,7 @@ def output(msg):
     print(str(msg))
     # sys.stderr.write(msg+'\n')
     # sys.stderr.flush()
+    # pts(msg)
 
 def pts(msg):
     global gdb_pid
@@ -21,8 +22,34 @@ def pts(msg):
 class DoNotForward(Exception):
     pass
 
+class TimeoutException(Exception):
+    pass
+
+def accept_timeout(server, timeout=0):
+    sock = server._listener._socket
+    while True:
+        try:
+            if len(select.select([sock], [sock], [sock], timeout)):
+                return server.accept()
+            break
+        except select.error as (e, m):
+            if e != errno.EINTR:
+                raise
+    raise TimeoutException()
+
+def AcceptLoop(server, action):
+    while True:
+        try:
+            conn = ProtocolSocket(accept_timeout(server, timeout=1))
+
+            Thread(target=action, args=(conn,)).start()
+        except TimeoutException:
+            if g_state['shutdown']:
+                output("Shutting down proxy server accept loop")
+                break
+
 def HandleProxyRequest(c):
-    global vim_tmux_pane, gdb_pid
+    global vim_tmux_pane, gdb_pid, g_state
     if c['op'] == 'trap':
         if c['target'] == 'gdb':
             if gdb_pid:
@@ -34,7 +61,7 @@ def HandleProxyRequest(c):
             output("Proxy trap with unknown target: " + str(c))
         return
     elif c['op'] == 'quit':
-        exit(0)
+        g_state['shutdown'] = True
     elif c['op'] == 'print':
         output(c['msg'])
     elif c['op'] == 'tmux_pane':
@@ -44,74 +71,81 @@ def HandleProxyRequest(c):
         output("Proxy packet with unknown op: " + str(c))
     raise DoNotForward()
 
-def ProxyConnection(connection_id, state, vim_conn, gdb_conn):
+def ProxyConnection(name, conns):
     global gdb_pid
-    while True:
-        try:
-            if state['shutdown'] or os.getppid() == 1:
-                output("GDB has terminated.  Ending proxy")
-                exit(0)
-            for ready in ProtocolSocket.select([vim_conn, gdb_conn], timeout=1):
-                c_data = ready.recv_packet()
-                c = json.loads(c_data.decode('utf-8'))
-                other_conn = vim_conn if ready is gdb_conn else gdb_conn
-                if c['dest'] == 'proxy':
-                    HandleProxyRequest(c)
-                elif c['dest'] == 'vim':
-                    c['conn'] = connection_id
-                elif c['dest'] == 'gdb':
-                    c['conn'] = connection_id
-                else:
-                    output("Packet with unknown dest: " + str(c))
-                other_conn.send_packet(json.dumps(c))
-        except IOError as e:
-            if e.errno != errno.EINTR:
-                break
-        except EOFError:
-            break
-        except SystemExit:
-            raise
-        except (select.error, DoNotForward, KeyboardInterrupt):
-            pass
-        except:
-            import traceback
-            traceback.print_exc()
-            output("Proxy continuing...")
-
-    output("Broken pipe encountered in the proxy.  Ending proxy.")
+    in_conn = conns[name]
     try:
-        if gdb_pid and state['gdb'] == 'managed':
-            output("Terminating GDB.")
-            os.kill(gdb_pid, signal.SIGTERM)
-    except:
-        pass
-    exit(0)
+        while True:
+            try:
+                if g_state['shutdown'] or os.getppid() == 1:
+                    output("GDB has terminated.  Ending proxy connection to %s" % name)
+                    gdb_pid = None
+                    exit(0)
+                for ready in ProtocolSocket.select([in_conn], timeout=1):
+                    c = ready.recv_packet()
+                    dest_conn = None
+                    if c['dst'] == 'proxy':
+                        HandleProxyRequest(c)
+                    else:
+                        c['src'] = name
+                        try:
+                            dest_conn = conns[c['dst']]
+                        except KeyError:
+                            # Swallow packets intended for vim if no vim is
+                            # connected
+                            #
+                            if c['dst'] != "vim":
+                                output("Packet with unknown destination: " + str(c))
+
+                    if dest_conn:
+                        dest_conn.send_packet(**c)
+
+            except IOError as e:
+                output("IOError(%s)" % str(e.errno))
+                if e.errno != errno.EINTR:
+                    break
+            except EOFError:
+                output("Proxy connection to %s has ended gracefully." % name)
+                break
+            except MalformedPacket as e:
+                output("Malformed packet: %s" % e)
+            except SystemExit:
+                raise
+            except (select.error, DoNotForward, KeyboardInterrupt):
+                pass
+            except:
+                import traceback
+                traceback.print_exc()
+                output("Proxy continuing...")
+
+    finally:
+        try:
+            if gdb_pid and g_state['gdb'] == 'managed' and name in ("vim", "gdb"):
+                output("Terminating GDB.")
+                os.kill(gdb_pid, signal.SIGTERM)
+        except:
+            pass
 
 def ProxyServer(gdb_conn, address_file):
-    global vim_tmux_pane
+    global vim_tmux_pane, g_state
     try:
-        connection_id = 0
-        state = { 'shutdown': False, 'gdb': 'superior' }
-        def _sighup_handler(signum, frame):
-            state['shutdown'] = True
-        # signal.signal(signal.SIGHUP, _sighup_handler)
-        # prctl.prctl(prctl.PDEATHSIG, signal.SIGHUP);
-
         if 'EXTERMINATOR_TUNNEL' in os.environ:
             # Remote side of an SSH connection
             #
             port = int(os.environ['EXTERMINATOR_TUNNEL'])
             host = '127.0.0.1'
             vim_conn = ProtocolSocket(Client((host, port)))
-            ProxyConnection(connection_id, state, vim_conn, gdb_conn)
+            conns = { 'vim': vim_conn, 'gdb': gdb_conn }
+            Thread(target=ProxyConnection, args=('vim', conns)).start()
+            Thread(target=ProxyConnection, args=('gdb', conns)).start()
         else:
             try:
                 server = Listener(('localhost', 0))
                 if address_file:
-                    state['gdb'] = 'managed'
+                    g_state['gdb'] = 'managed'
                     open(address_file, 'w').write(json.dumps(server.address))
                 else:
-                    output("Waiting for connection on %s:%d" % server.address)
+                    output("Proxy server is running on %s:%d" % server.address)
                     command = 'GdbConnect %s:%d' % server.address
                     if 'DISPLAY' in os.environ:
                         output("Connect in vim using '%s' (in selection buffer)" % command)
@@ -120,30 +154,43 @@ def ProxyServer(gdb_conn, address_file):
                         output("Connect in vim using '%s'" % command)
                 if vim_tmux_pane:
                     os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbConnect\')" ENTER' % (vim_tmux_pane))
-                gdb_conn.send_packet(json.dumps({'dest': 'gdb', 'op': 'init', 'port': server.address[1], 'host': server.address[0]}).encode('utf-8'))
-                def exit_proxy(a, b):
-                    output("GDB has gone away.  Terminating proxy.")
-                    if vim_tmux_pane:
-                        os.system('tmux send-keys -t %s "\x1b\x1b:call HistPreserve(\'GdbRefresh\')" ENTER' % (vim_tmux_pane))
-                    exit(0)
-                # signal.signal(signal.SIGHUP, exit_proxy)
-                # signal.signal(signal.SIGINT, signal.SIG_IGN)
+                gdb_conn.send_packet(dst='gdb', op='init', port=server.address[1], host=server.address[0])
             except:
+                output("Error occurred during proxy server initialization")
                 import traceback
                 traceback.print_exc()
                 output("Aborting proxy")
                 return
-            while True:
-                vim_conn = ProtocolSocket(server.accept())
-                ProxyConnection(connection_id, state, vim_conn, gdb_conn)
-                vim_conn.close()
+
+            conns = { 'gdb': gdb_conn }
+            Thread(target=ProxyConnection, args=('gdb', conns)).start()
+
+            conns_lock = Lock()
+
+            def _Thread(conn):
+                try:
+                    name = conn.recv_op('name')['name']
+                    with conns_lock:
+                        if name in conns:
+                            output("Attempt to create duplicate connection to %s" % name)
+                            return
+                        conns[name] = conn
+                    ProxyConnection(name, conns)
+                except (EOFError, IOError, MalformedPacket) as e:
+                    output("Failed to receive name packet: %s" % e)
+                    return
+                finally:
+                    conn.close()
+
+            AcceptLoop(server, _Thread)
+
     except SystemExit:
         raise
     except:
         import traceback
         output(traceback.format_exc())
         try:
-            gdb_conn.send_packet(json.dumps({'op': 'init', 'dest': 'gdb', 'error': True}))
+            gdb_conn.send_packet(op='init', dst='gdb', error=True)
             gdb_conn.close()
         except IOError:
             output('shit')
@@ -159,14 +206,18 @@ def RunServer():
         except SystemExit:
             pass
 
-    while True:
-        gdb_conn = ProtocolSocket(server.accept())
-        Thread(target=_ServerThread, args=(gdb_conn,)).start()
+    AcceptLoop(server, _ServerThread)
 
 if __name__ == '__main__':
     exterminator_file = None
     vim_tmux_pane = None
     gdb_pid = None
+
+    g_state = { 'shutdown': False, 'gdb': 'superior' }
+    def _sighup_handler(signum, frame):
+        global g_state
+        g_state['shutdown'] = True
+    signal.signal(signal.SIGHUP, _sighup_handler)
 
     if 'EXTERMINATOR_FILE' in os.environ:
         exterminator_file = os.environ['EXTERMINATOR_FILE']
@@ -176,21 +227,33 @@ if __name__ == '__main__':
     if 'EXTERMINATOR_SERVER' in os.environ:
         # Local side of an SSH connection
         #
-        RunServer()
-        exit(0)
+        try:
+            RunServer()
+        finally:
+            exit(0)
 
     gdb_pid = os.getpid()
     gdb_sock, gdb_proxy = Pipe(True)
 
-    proxy = Process(target=ProxyServer, args=(ProtocolSocket(gdb_proxy), exterminator_file))
-    proxy.daemon = True
-    proxy.start()
+    if os.fork() == 0:
+        try:
+            import ctypes
 
-    from gdb_exterminator import Gdb
-    try:
-        gdb_manager = Gdb(ProtocolSocket(gdb_sock))
-    except (IOError, EOFError):
-        pass
+            libc = ctypes.cdll.LoadLibrary("libc.so.6")
+            name = "exterminator_proxy"
+            buff = ctypes.create_string_buffer(len(name) + 1)
+            buff.value = name
+            libc.prctl(15, ctypes.byref(buff), 0, 0, 0)
+
+            ProxyServer(ProtocolSocket(gdb_proxy), exterminator_file)
+        finally:
+            exit(0)
     else:
-        gdb_manager.attach_hooks()
+        from gdb_exterminator import Gdb
+        try:
+            gdb_manager = Gdb(ProtocolSocket(gdb_sock))
+        except (IOError, EOFError):
+            pass
+        else:
+            gdb_manager.attach_hooks()
 

@@ -1,3 +1,4 @@
+import re
 import gdb
 
 def get_str(value):
@@ -173,10 +174,21 @@ def gdb_to_py(name, value):
         p = len("%d" % len(lines))
         return { "Python server error": { "%0*d: %s" % (p, i, line): 0 for i, line in enumerate(lines) } }
 
+def extract_vars(cmd):
+    try:
+        lines = gdb.execute("info args", to_string=True).split('\n')[:-1]
+    except gdb.error:
+        return
+
+    for line in lines:
+        m = re.match(r'^([a-zA-Z0-9_]+) =', line)
+
+        if m is not None:
+            yield m.group(1)
+
 def locals_to_py():
-    variables = [ 'this' ]
-    variables += [ a.split(' = ', 1)[0] for a in gdb.execute("info args", to_string=True).split('\n')[:-1] ]
-    variables += [ l.split(' = ', 1)[0] for l in gdb.execute("info locals", to_string=True).split('\n')[:-1] ]
+    variables = list(extract_vars("info args"))
+    variables += list(extract_vars("info locals"))
     contents = {}
     for var in variables:
         try:

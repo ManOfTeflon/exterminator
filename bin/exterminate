@@ -1,6 +1,6 @@
 #!/bin/bash
 
-usage_message="$0 [-s] [-l log] [-p pid_file] [--lock lock_file] [-P port] ...\n$0 ssh ..."
+usage_message="$0 [-s] [-l log] [-p pid_file] [-e cmd] [-P port] ...\n$0 ssh ..."
 
 owned=
 root_dir="$( cd "$( dirname $( realpath "${BASH_SOURCE[0]}" ) )/.." && pwd )"
@@ -24,7 +24,7 @@ parse_opt () {
         val=$(echo "$opt" | sed -r "s/(-$short|--$long=)//")
     fi
     if [ -z "$val" ]; then
-        val=$next
+        val="$next"
         ret=1
     fi
 
@@ -70,7 +70,7 @@ if [ "$1" = "ssh" ]; then
     host="${params[${#params[@]}-1]}"
     declare -a scp_args=( "${params[@]}" )
     local_paths=( $root_dir/{lib,conf,bin,build} )
-    
+
     unset scp_args[${#scp_args[@]}-1]
 
     echo "Copying exterminator files"
@@ -92,34 +92,40 @@ log=
 sudo=
 lock=
 port=
+exec_cmd=
 while (( "$#" )); do
     case $1 in
         -h|--help)
             usage
             ;;
         -t*|--term=*|--term)
-            if ! parse_opt term t $@; then
+            if ! parse_opt term t "$@"; then
                 shift
             fi
             ;;
         -l*|--log=*|--log)
-            if ! parse_opt log l $@; then
+            if ! parse_opt log l "$@"; then
                 shift
             fi
             ;;
         -p*|--pid-file=*|--pid-file)
-            if ! parse_opt pid-file p $@; then
+            if ! parse_opt pid-file p "$@"; then
+                shift
+            fi
+            ;;
+        -e*|--exec-cmd=*|--exec-cmd)
+            if ! parse_opt exec-cmd e "$@"; then
                 shift
             fi
             ;;
         -P*|--port=*|--port)
-            if ! parse_opt port P $@; then
+            if ! parse_opt port P "$@"; then
                 shift
             fi
             sudo="yes"
             ;;
         --lock=*|--lock)
-            if ! parse_opt lock - $@; then
+            if ! parse_opt lock - "$@"; then
                 shift
             fi
             ;;
@@ -138,7 +144,7 @@ done
 declare -a params=( "$@" )
 
 if [ -n "$port" ]; then
-    pid=$(fuser $port/tcp 2>/dev/null)
+    pid=$(fuser $port/tcp 2>/dev/null | awk '{ print $1; }')
     if [ -z "$pid" ]; then
         echo "No process on port $port" 1>&2
         exit 1
@@ -147,6 +153,38 @@ if [ -n "$port" ]; then
 fi
 
 if (( ! "${#params[@]}" )); then usage; fi
+
+if [ -n "$exec_cmd" ]; then
+    if [ -z "$pid" ]; then
+        echo "Must specify a pid or server port to send a command" 1>&2
+        exit 1
+    fi
+
+    gdb_pid="$(cat /proc/$pid/status | awk '/^TracerPid:/ { print $2; }')"
+
+    if [ -z "$gdb_pid" -o $gdb_pid = "0" ]; then
+        echo "Gdb is not attached to process ${pid}" 2>&1
+        exit 1
+    fi
+
+    proxy_pid=$(ps --ppid $gdb_pid -o comm=,pid= | awk '/^exterminator_pr/ { print $2; }')
+
+    if [ -z "$proxy_pid" ]; then
+        echo "Gdb process ${gdb_pid} is not running exterminator" 1>&2
+        exit 1
+    fi
+
+    port=$(lsof -Pan -p "$proxy_pid" -i 2>/dev/null | awk '/LISTEN/ { print $9; }' | cut -d':' -f2)
+
+    if [ -z "$port" ]; then
+        echo "Exterminator process ${proxy_pid} is not listening on any port" 1>&2
+        exit 1
+    fi
+
+    python $root_dir/lib/gdb_exec.py "${port}" "${exec_cmd}"
+    e=$?
+    exit $e
+fi
 
 # Returns in $owned and $pts
 #
@@ -185,6 +223,10 @@ launch () {
     fi
 }
 
+if [ -n "${lock}" ]; then
+    flock $lock touch $lock
+fi
+
 current_pane=$(tmux list-panes -F '#{?pane_active,active,} #{pane_id}' | grep active | awk '{ print $2 }')
 
 if [ -z "$EXTERMINATOR_FILE" ]; then
@@ -217,10 +259,6 @@ if [ -n "$pid_file" ]; then
 fi
 
 clear
-if [ -n "$lock" ]; then
-    echo "Waiting for '$lock'"
-    flock $lock echo -n
-fi
 
 if [ -z "$sudo" ]; then
     gdb -x $root_dir/lib/exterminator.py -x $gdb_file "${params[@]}"
