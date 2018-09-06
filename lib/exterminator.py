@@ -32,8 +32,8 @@ def accept_timeout(server, timeout=0):
             if len(select.select([sock], [sock], [sock], timeout)):
                 return server.accept()
             break
-        except select.error as (e, m):
-            if e != errno.EINTR:
+        except select.error as e:
+            if e[0] != errno.EINTR:
                 raise
     raise TimeoutException()
 
@@ -239,11 +239,11 @@ if __name__ == '__main__':
         try:
             import ctypes
 
-            libc = ctypes.cdll.LoadLibrary("libc.so.6")
-            name = "exterminator_proxy"
-            buff = ctypes.create_string_buffer(len(name) + 1)
-            buff.value = name
-            libc.prctl(15, ctypes.byref(buff), 0, 0, 0)
+            # libc = ctypes.cdll.LoadLibrary("libc.so.6")
+            # name = "exterminator_proxy"
+            # buff = ctypes.create_string_buffer(len(name) + 1)
+            # buff.value = name
+            # libc.prctl(15, ctypes.byref(buff), 0, 0, 0)
 
             ProxyServer(ProtocolSocket(gdb_proxy), exterminator_file)
         finally:
